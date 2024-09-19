@@ -6,6 +6,19 @@ const nextConfig = {
 	experimental: {
 		after: true,
 	},
+	webpack: (config, { isServer }) => {
+		config.experiments = {
+			...config.experiments,
+			asyncWebAssembly: true,
+		};
+
+		// Optionally, if you need to use WASM in the browser:
+		if (!isServer) {
+			config.output.webassemblyModuleFilename = 'static/wasm/[modulehash].wasm';
+		}
+
+		return config;
+	},
 	async headers() {
 		return [
 			{
@@ -26,6 +39,7 @@ const nextConfig = {
 };
 
 export default nextConfig;
+
 
 async function copyFiles() {
 	try {
