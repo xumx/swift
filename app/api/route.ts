@@ -196,10 +196,10 @@ async function getTranscript(input: string | File) {
     const { text } = await groq.audio.transcriptions.create({
       file: input,
       prompt: "Singapore Healthcare topics, use British spelling",
-      model: "whisper-large-v3",
+      // model: "whisper-large-v3",
       // language: "en",
-      // model: "distil-whisper-large-v3-en",
-      // language: "en",
+      model: "distil-whisper-large-v3-en",
+      language: "en",
     });
 
     return text.trim() || null;
