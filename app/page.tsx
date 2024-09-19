@@ -5,10 +5,9 @@ import { useActionState, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { EnterIcon, LoadingIcon } from "@/lib/icons";
 import { usePlayer } from "@/lib/usePlayer";
+import { useMicVAD, utils } from "@ricky0123/vad-react";
 import { track } from "@vercel/analytics";
 import type * as ORT from "onnxruntime-web";
-import { useMicVAD, utils } from "@ricky0123/vad-react";
-
 
 type Message = {
   role: "user" | "assistant";
@@ -18,6 +17,7 @@ type Message = {
 
 import { MultiStepFormComponent } from "@/components/multi-step-form";
 import { sampleData } from "@/lib/sample";
+import { AudioRecorderComponent } from "@/components/audio-recorder";
 // import Image from "next/image";
 
 export default function Home() {
@@ -30,22 +30,23 @@ export default function Home() {
   const player = usePlayer();
 
   const vad = useMicVAD({
-    startOnLoad: true,
+    startOnLoad: false,
     onSpeechEnd: (audio) => {
       player.stop();
       const wav = utils.encodeWAV(audio);
       const blob = new Blob([wav], { type: "audio/wav" });
       submit(blob);
-      const isFirefox = navigator.userAgent.includes("Firefox");
-      console.log("isFirefox", isFirefox);
-      if (isFirefox) vad.pause();
+      vad.pause();
+    },
+    onSpeechStart() {
+      player.stop();
     },
     workletURL: "/vad.worklet.bundle.min.js",
     modelURL: "/silero_vad.onnx",
     positiveSpeechThreshold: 0.6,
     minSpeechFrames: 4,
     ortConfig(ort: typeof ORT) {
-      console.log(ort.env)
+      console.log(ort.env);
       const isSafari = /^((?!chrome|android).)*safari/i.test(
         navigator.userAgent
       );
@@ -55,7 +56,7 @@ export default function Home() {
           "ort-wasm-simd-threaded.wasm": "/ort-wasm-simd-threaded.wasm",
           "ort-wasm-simd.wasm": "/ort-wasm-simd.wasm",
           "ort-wasm.wasm": "/ort-wasm.wasm",
-          "ort-wasm-threaded.wasm": "/ort-wasm-threaded.wasm"
+          "ort-wasm-threaded.wasm": "/ort-wasm-threaded.wasm",
         },
         numThreads: isSafari ? 1 : 4,
       };
@@ -72,7 +73,6 @@ export default function Home() {
     return () => window.removeEventListener("keydown", keyDown);
   });
 
-
   const [messages, submit, isPending] = useActionState<
     Array<Message>,
     string | Blob
@@ -83,7 +83,7 @@ export default function Home() {
       audioFormData.append("input", data);
       track("Text input");
     } else {
-      audioFormData.append("input", data, "audio.wav");
+      audioFormData.append("input", data, "audio.webm");
       track("Speech input");
     }
 
@@ -105,18 +105,23 @@ export default function Home() {
     );
 
     if (response.headers.get("X-Formdata")) {
-      const formFillData = JSON.parse(decodeURIComponent(
-        response.headers.get("X-Formdata") || ""
-      ));
-  
+      const formFillData = JSON.parse(
+        decodeURIComponent(response.headers.get("X-Formdata") || "")
+      );
+
       console.log(formFillData);
       // Determine which step of the form to jump to based on the received data
       const determineStep = (formFillData: Partial<typeof sampleData>) => {
-        let possibleStep = 1;  // Default to first step if no match
+        let possibleStep = 1; // Default to first step if no match
         let stepLabel = "MedicalHistory";
-        if (formFillData.MedicalHistory || formFillData.CurrentFunctionalStatus || formFillData.AssessedAddress) {
+        if (
+          formFillData.MedicalHistory ||
+          formFillData.CurrentFunctionalStatus ||
+          formFillData.AssessedAddress
+        ) {
           possibleStep = 1;
-          stepLabel = "Medical History, Current Functional Status & Assessed Address";
+          stepLabel =
+            "Medical History, Current Functional Status & Assessed Address";
         } else if (formFillData.SocialBackground) {
           possibleStep = 2;
           stepLabel = "Social Background";
@@ -152,17 +157,17 @@ export default function Home() {
           stepLabel = "Attachment Link";
         }
 
-        return {possibleStep, stepLabel};
+        return { possibleStep, stepLabel };
       };
-      
-      const {possibleStep, stepLabel} = determineStep(formFillData);
+
+      const { possibleStep, stepLabel } = determineStep(formFillData);
       console.log(`Step: ${possibleStep}, ${stepLabel}`);
-      
+
       setStep(possibleStep);
-      setFormData(prevData => ({
+      setFormData((prevData) => ({
         ...prevData,
-        ...formFillData
-      }));  
+        ...formFillData,
+      }));
     }
 
     const text = decodeURIComponent(response.headers.get("X-Response") || "");
@@ -214,23 +219,26 @@ export default function Home() {
       setFormData(sampleData);
     }
   };
-  
+
   // Expose addSampleData function to window object
   if (typeof window !== "undefined") {
     (window as any).addSampleData = addSampleData;
   }
-  
 
   return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)] w-full sm:w-4/5 mx-auto">
+    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen sm:p-12 font-[family-name:var(--font-geist-sans)] w-full sm:w-4/5 mx-auto">
       <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start w-full">
+        <div className="flex justify-center w-full">
+          <AudioRecorderComponent onSubmit={submit} />
+        </div>
+
         <form
           className="rounded-full bg-neutral-200/80 dark:bg-neutral-800/80 flex items-center w-full border border-transparent hover:border-neutral-300 focus-within:border-neutral-400 hover:focus-within:border-neutral-400 dark:hover:border-neutral-700 dark:focus-within:border-neutral-600 dark:hover:focus-within:border-neutral-600"
           onSubmit={handleFormSubmit}
         >
           <input
             type="text"
-            className="bg-transparent focus:outline-none p-4 w-full placeholder:text-neutral-600 dark:placeholder:text-neutral-400"
+            className="bg-transparent focus:outline-none p-4 w-full text-black dark:text-white placeholder:text-neutral-500 dark:placeholder:text-neutral-400"
             required
             placeholder="Ask me anything"
             value={input}
@@ -248,28 +256,30 @@ export default function Home() {
           </button>
         </form>
 
-        <div className="text-neutral-400 dark:text-neutral-600 pt-4 text-center max-w-xl text-balance min-h-28 space-y-4">
-          {messages.length > 0 && (
-            <p>
-              {messages.at(-1)?.content}
-              <span className="text-xs font-mono text-neutral-300 dark:text-neutral-700">
-                {" "}
-                ({messages.at(-1)?.latency}ms)
-              </span>
-            </p>
-          )}
+        <div className="flex justify-center w-full">
+          <div className="text-neutral-400 dark:text-neutral-600 pt-4 text-center max-w-xl text-balance min-h-28 space-y-4">
+            {messages.length > 0 && (
+              <p>
+                {messages.at(-1)?.content}
+                <span className="text-xs font-mono text-neutral-300 dark:text-neutral-700">
+                  {" "}
+                  ({messages.at(-1)?.latency}ms)
+                </span>
+              </p>
+            )}
 
-          {messages.length === 0 && (
-            <>
-              {vad.loading ? (
-                <p>Loading speech detection...</p>
-              ) : vad.errored ? (
-                <p>Failed to load speech detection.</p>
-              ) : (
-                <p>Start talking to chat.</p>
-              )}
-            </>
-          )}
+            {messages.length === 0 && (
+              <>
+                {vad.loading ? (
+                  <p>Loading speech detection...</p>
+                ) : vad.errored ? (
+                  <p>Failed to load speech detection.</p>
+                ) : (
+                  <></>
+                )}
+              </>
+            )}
+          </div>
         </div>
 
         <div
@@ -283,8 +293,12 @@ export default function Home() {
           )}
         />
 
-        <MultiStepFormComponent formData={formData} setFormData={setFormData} step={step} setStep={setStep} />
-
+        <MultiStepFormComponent
+          formData={formData}
+          setFormData={setFormData}
+          step={step}
+          setStep={setStep}
+        />
       </main>
       <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center"></footer>
     </div>

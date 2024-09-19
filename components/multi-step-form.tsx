@@ -17,6 +17,33 @@ interface MultiStepFormProps {
 }
 
 export function MultiStepFormComponent({ formData, setFormData, step, setStep }: MultiStepFormProps) {
+  // Define the steps and labels
+  const steps = [
+    { step: 1, label: "Medical History" },
+    { step: 2, label: "Background" },
+    { step: 3, label: "Equipments" },
+    { step: 4, label: "Accessibility" },
+    { step: 5, label: "Living Area" },
+    { step: 6, label: "Bathroom/Toilet" },
+    { step: 7, label: "Bedroom" },
+    { step: 8, label: "Kitchen" }
+  ];
+
+  // Navigation bar component
+  const renderNavigation = () => (
+    <div className="flex mb-2">
+      {steps.map(({ step: stepNumber, label }) => (
+        <Button
+          key={stepNumber}
+          className={step === stepNumber ? "bg-white text-black" : "bg-transparent"}
+          onClick={(e) => {setStep(stepNumber); e.preventDefault();}}
+        >
+          {label}
+        </Button>
+      ))}
+    </div>
+  );
+
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value, type } = e.target
     setFormData((prevData: any) => {
@@ -712,8 +739,7 @@ export function MultiStepFormComponent({ formData, setFormData, step, setStep }:
                     <SelectItem value="Assessed">Assessed</SelectItem>
                     <SelectItem value="Not Applicable">Not Applicable</SelectItem>
                   </SelectContent>
-                </Select>
-              </div>
+                </Select>              </div>
               <div className="space-y-2">
                 <Label htmlFor="BathroomLocation">Bathroom Location</Label>
                 <Input
@@ -1684,7 +1710,10 @@ export function MultiStepFormComponent({ formData, setFormData, step, setStep }:
   }
 
   return (
+    <>
+    {renderNavigation()}
     <form onSubmit={handleSubmit} className="w-full max-w-3xl mx-auto p-4 space-y-4">
+      
       <Card>
         {renderStep()}
         <CardFooter className="flex justify-between">
@@ -1703,5 +1732,6 @@ export function MultiStepFormComponent({ formData, setFormData, step, setStep }:
         </CardFooter>
       </Card>
     </form>
+    </>
   )
 }

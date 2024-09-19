@@ -277,7 +277,7 @@ export const FormSchema  = {
 			"properties": {
 			  "PresenceOfBed": { "type": "boolean" },
 			  "Height": { "type": "number" },
-			  "Remarks": { "type": "string", "enum": ["Able", "Unable"] }
+			  "Remarks": { "type": "string" }
 			}
 		  },
 		  "BedroomRugs": {
@@ -414,34 +414,34 @@ export const FormSchema  = {
 		  }
 		}
 	  },
-	  "ClientFamilyEducation": {
-		"type": "object",
-		"properties": {
-		  "EducationProvidedTo": {
-			"type": "string",
-			"enum": ["Client", "Social Support"]
-		  },
-		  "SocialSupport": {
-			"type": "array",
-			"items": {
-			  "type": "string"
-			}
-		  },
-		  "EducationDone": { "type": "string", "maxLength": 500 },
-		  "EducationPerformance": {
-			"type": "string",
-			"enum": ["Competent", "Not Competent", "Not Applicable"]
-		  },
-		  "EducationPerformanceRemarks": { "type": "string", "maxLength": 50 },
-		  "EducationFollowup": {
-			"type": "object",
-			"properties": {
-			  "FollowupNeeded": { "type": "boolean" },
-			  "FollowupRemarks": { "type": "string", "maxLength": 50 }
-			}
-		  }
-		}
-	  },
-	  "AttachmentLink": { "type": "string" }
+	//   "ClientFamilyEducation": {
+	// 	"type": "object",
+	// 	"properties": {
+	// 	  "EducationProvidedTo": {
+	// 		"type": "string",
+	// 		"enum": ["Client", "Social Support"]
+	// 	  },
+	// 	  "SocialSupport": {
+	// 		"type": "array",
+	// 		"items": {
+	// 		  "type": "string"
+	// 		}
+	// 	  },
+	// 	  "EducationDone": { "type": "string", "maxLength": 500 },
+	// 	  "EducationPerformance": {
+	// 		"type": "string",
+	// 		"enum": ["Competent", "Not Competent", "Not Applicable"]
+	// 	  },
+	// 	  "EducationPerformanceRemarks": { "type": "string", "maxLength": 50 },
+	// 	  "EducationFollowup": {
+	// 		"type": "object",
+	// 		"properties": {
+	// 		  "FollowupNeeded": { "type": "boolean" },
+	// 		  "FollowupRemarks": { "type": "string", "maxLength": 50 }
+	// 		}
+	// 	  }
+	// 	}
+	//   },
+	//   "AttachmentLink": { "type": "string" }
 	}
   }
