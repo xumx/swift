@@ -5,7 +5,7 @@ import { useActionState, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { EnterIcon, LoadingIcon } from "@/lib/icons";
 import { usePlayer } from "@/lib/usePlayer";
-import { useMicVAD, utils } from "@ricky0123/vad-react";
+// import { useMicVAD, utils } from "@ricky0123/vad-react";
 import { track } from "@vercel/analytics";
 import type * as ORT from "onnxruntime-web";
 
@@ -21,7 +21,7 @@ import { AudioRecorderComponent } from "@/components/audio-recorder";
 // import Image from "next/image";
 
 export default function Home() {
-  const [input, setInput] = useState("Hello");
+  const [input, setInput] = useState("");
 
   const [step, setStep] = useState(1);
   const [formData, setFormData] = useState({});
@@ -29,39 +29,40 @@ export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
   const player = usePlayer();
 
-  const vad = useMicVAD({
-    startOnLoad: false,
-    onSpeechEnd: (audio) => {
-      player.stop();
-      const wav = utils.encodeWAV(audio);
-      const blob = new Blob([wav], { type: "audio/wav" });
-      submit(blob);
-      vad.pause();
-    },
-    onSpeechStart() {
-      player.stop();
-    },
-    workletURL: "/vad.worklet.bundle.min.js",
-    modelURL: "/silero_vad.onnx",
-    positiveSpeechThreshold: 0.6,
-    minSpeechFrames: 4,
-    ortConfig(ort: typeof ORT) {
-      console.log(ort.env);
-      const isSafari = /^((?!chrome|android).)*safari/i.test(
-        navigator.userAgent
-      );
+  const vad = {}
+  // const vad = useMicVAD({
+  //   startOnLoad: false,
+  //   onSpeechEnd: (audio) => {
+  //     player.stop();
+  //     const wav = utils.encodeWAV(audio);
+  //     const blob = new Blob([wav], { type: "audio/wav" });
+  //     submit(blob);
+  //     vad.pause();
+  //   },
+  //   onSpeechStart() {
+  //     player.stop();
+  //   },
+  //   workletURL: "/vad.worklet.bundle.min.js",
+  //   modelURL: "/silero_vad.onnx",
+  //   positiveSpeechThreshold: 0.6,
+  //   minSpeechFrames: 4,
+  //   ortConfig(ort: typeof ORT) {
+  //     console.log(ort.env);
+  //     const isSafari = /^((?!chrome|android).)*safari/i.test(
+  //       navigator.userAgent
+  //     );
 
-      ort.env.wasm = {
-        wasmPaths: {
-          "ort-wasm-simd-threaded.wasm": "/ort-wasm-simd-threaded.wasm",
-          "ort-wasm-simd.wasm": "/ort-wasm-simd.wasm",
-          "ort-wasm.wasm": "/ort-wasm.wasm",
-          "ort-wasm-threaded.wasm": "/ort-wasm-threaded.wasm",
-        },
-        numThreads: isSafari ? 1 : 4,
-      };
-    },
-  });
+  //     ort.env.wasm = {
+  //       wasmPaths: {
+  //         "ort-wasm-simd-threaded.wasm": "/ort-wasm-simd-threaded.wasm",
+  //         "ort-wasm-simd.wasm": "/ort-wasm-simd.wasm",
+  //         "ort-wasm.wasm": "/ort-wasm.wasm",
+  //         "ort-wasm-threaded.wasm": "/ort-wasm-threaded.wasm",
+  //       },
+  //       numThreads: isSafari ? 1 : 4,
+  //     };
+  //   },
+  // });
 
   useEffect(() => {
     function keyDown(e: KeyboardEvent) {
@@ -256,7 +257,14 @@ export default function Home() {
           </button>
         </form>
 
-        <div className="flex justify-center w-full">
+        <MultiStepFormComponent
+          formData={formData}
+          setFormData={setFormData}
+          step={step}
+          setStep={setStep}
+        />
+
+        <div className="flex justify-center w-full pt-100px">
           <div className="text-neutral-400 dark:text-neutral-600 pt-4 text-center max-w-xl text-balance min-h-28 space-y-4">
             {messages.length > 0 && (
               <p>
@@ -284,7 +292,7 @@ export default function Home() {
 
         <div
           className={clsx(
-            "absolute size-36 blur-3xl rounded-full bg-gradient-to-b from-red-200 to-red-400 dark:from-red-600 dark:to-red-800 -z-50 transition ease-in-out",
+            "absolute size-36 blur-3xl rounded-full bg-gradient-to-b from-red-200 to-red-400 dark:from-red-600 dark:to-red-800 -z-50 transition ease-in-out pt-100px",
             {
               "opacity-0": vad.loading || vad.errored,
               "opacity-30": !vad.loading && !vad.errored && !vad.userSpeaking,
@@ -292,15 +300,8 @@ export default function Home() {
             }
           )}
         />
-
-        <MultiStepFormComponent
-          formData={formData}
-          setFormData={setFormData}
-          step={step}
-          setStep={setStep}
-        />
       </main>
-      <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center"></footer>
+      <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center "></footer>
     </div>
   );
 }
