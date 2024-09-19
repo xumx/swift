@@ -1,5 +1,6 @@
 "use client"
 
+
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -61,16 +62,30 @@ export function MultiStepFormComponent({ formData, setFormData, step, setStep }:
   }
 
   const handleNext = () => {
-    setStep((prevStep) => prevStep + 1)
+    setStep((prevStep: number) => prevStep + 1)
   }
 
   const handlePrevious = () => {
-    setStep((prevStep) => prevStep - 1)
+    setStep((prevStep: number) => prevStep - 1)
   }
 
-  const handleSubmit = (e) => {
+  const handleSubmit = (e: any) => {
     e.preventDefault()
     console.log("Form submitted:", formData)
+
+    // Format formData as a multi-line string
+    const formattedData = Object.entries(formData)
+      .map(([key, value]) => {
+        if (typeof value === 'object' && value !== null) {
+          return `${key}:\n${JSON.stringify(value, null, 2)}`
+        }
+        return `${key}: ${value}`
+      })
+      .join('\n\n')
+
+    console.log("Formatted form data:")
+    console.log(formattedData)
+    alert("Form Submitted:\n" + formattedData);
     // Here you would typically send the data to your backend
   }
 
@@ -145,7 +160,7 @@ export function MultiStepFormComponent({ formData, setFormData, step, setStep }:
                           } else {
                             handleSelectChange(
                               "SocialBackground.HomeSituation",
-                              formData.SocialBackground?.HomeSituation?.filter((item) => item !== situation)
+                              formData.SocialBackground?.HomeSituation?.filter((item: any) => item !== situation)
                             )
                           }
                         }}
@@ -167,7 +182,7 @@ export function MultiStepFormComponent({ formData, setFormData, step, setStep }:
               </div>
               <div className="space-y-2">
                 <Label>Social Support</Label>
-                {(formData.SocialBackground?.SocialSupport || []).map((support, index) => (
+                {(formData.SocialBackground?.SocialSupport || []).map((support: any, index: any) => (
                   <div key={index} className="space-y-2 border p-2 rounded">
                     <Input
                       placeholder="Name"
@@ -752,9 +767,7 @@ export function MultiStepFormComponent({ formData, setFormData, step, setStep }:
                     <Label htmlFor="KerbMeasurement">Kerb Measurement</Label>
                     <Input
                       id="KerbMeasurement"
-                      name="BathroomToilet.Bathroom
-
-KerbEntrance.Measurement"
+                      name="BathroomToilet.BathroomKerbEntrance.Measurement"
                       value={formData.BathroomToilet?.BathroomKerbEntrance?.Measurement || ""}
                       onChange={handleInputChange}
                       maxLength={100}
@@ -1491,7 +1504,7 @@ KerbEntrance.Measurement"
               )}
               <div className="space-y-2">
                 <Label>Problems and Recommendations</Label>
-                {(formData.SubjectiveInformation?.Problems || []).map((problem, index) => (
+                {(formData.SubjectiveInformation?.Problems || []).map((problem: any, index: number) => (
                   <div key={index} className="space-y-2 border p-2 rounded">
                     <Input
                       placeholder="Main Problem"
@@ -1572,7 +1585,7 @@ KerbEntrance.Measurement"
                             handleSelectChange(
                               "ClientFamilyEducation.SocialSupport",
                               formData.ClientFamilyEducation?.SocialSupport?.filter(
-                                (item) => item !== support
+                                (item: any) => item !== support
                               )
                             )
                           }

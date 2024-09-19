@@ -26,10 +26,7 @@
         "./*"
       ]
     },
-    "target": "ES2017",
-    "rules": {
-      "@typescript-eslint/no-explicit-any": "off"
-    }
+    "target": "ES2017"
   },
   "include": [
     "next-env.d.ts",
