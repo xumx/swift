@@ -185,8 +185,8 @@ export default function Home() {
 
     const latency = Date.now() - submittedAt;
     player.play(response.body, () => {
-      const isFirefox = navigator.userAgent.includes("Firefox");
-      if (isFirefox) vad.start();
+      // const isFirefox = navigator.userAgent.includes("Firefox");
+      // if (isFirefox) vad.start();
     });
     setInput(transcript);
 
@@ -276,7 +276,7 @@ export default function Home() {
               </p>
             )}
 
-            {messages.length === 0 && (
+            {/* {messages.length === 0 && (
               <>
                 {vad.loading ? (
                   <p>Loading speech detection...</p>
@@ -286,11 +286,11 @@ export default function Home() {
                   <></>
                 )}
               </>
-            )}
+            )} */}
           </div>
         </div>
 
-        <div
+        {/* <div
           className={clsx(
             "absolute size-36 blur-3xl rounded-full bg-gradient-to-b from-red-200 to-red-400 dark:from-red-600 dark:to-red-800 -z-50 transition ease-in-out pt-100px",
             {
@@ -299,7 +299,7 @@ export default function Home() {
               "opacity-100 scale-110": vad.userSpeaking,
             }
           )}
-        />
+        /> */}
       </main>
       <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center "></footer>
     </div>
