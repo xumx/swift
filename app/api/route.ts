@@ -103,11 +103,11 @@ export async function POST(request: Request) {
   console.log(fillForm);
 
   const completion = await groq.chat.completions.create({
-    model: "llama-3.1-8b-instant",
+    model: "llama-3.1-70b-versatile",
     messages: [
       {
         role: "system",
-        content: `Schema ${FormSchema}\n\n Identify the next question to ask, prompt the user to continue on to complete the Home Visit Report form to assess patient living environment. Be concise and just ask 1 questions at a time, do not deviate from the questions in the form schema`,
+        content: `Schema ${FormSchema}\n\n Identify the next question to ask, prompt the user to continue to complete the Home Visit Report form to assess patient living environment. Be short and concise and just ask one question at a time.`,
       },
       ...data.message,
       {
