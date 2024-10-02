@@ -5,9 +5,7 @@ import { useActionState, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { EnterIcon, LoadingIcon } from "@/lib/icons";
 import { usePlayer } from "@/lib/usePlayer";
-// import { useMicVAD, utils } from "@ricky0123/vad-react";
 import { track } from "@vercel/analytics";
-import type * as ORT from "onnxruntime-web";
 
 type Message = {
   role: "user" | "assistant";
@@ -213,13 +211,22 @@ export default function Home() {
           latency,
         },
       ];
+    } else {
+      return [
+        ...prevMessages,
+        {
+          role: "user",
+          content: transcript,
+        }
+      ];
     }
+
   }, []);
 
   function handleFormSubmit(e: React.FormEvent) {
     e.preventDefault();
     console.log("Form data:", formData);
-    submit(input);
+    submit();
   }
 
   const addSampleData = (sectionName: string) => {
