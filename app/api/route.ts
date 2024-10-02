@@ -20,6 +20,44 @@ const schema = zfd.formData({
   formData: zfd.json(z.any({})),
 });
 
+async function answerQuestion(transcript: string, messages: any[]) {
+  const completion = await groq.chat.completions.create({
+    model: "llama-3.1-70b-versatile",
+    messages: [
+      {
+        role: "system",
+        content: `Schema ${FormSchema}\n\nBe short and concise while responding in a friendly tone to the user's question.`,
+      },
+      ...messages,
+      {
+        role: "user",
+        content: transcript,
+      },
+    ],
+  });
+
+  return completion.choices[0].message.content!
+}
+
+async function nextQuestion(transcript: string, messages: any[]) {
+  const completion = await groq.chat.completions.create({
+    model: "llama-3.1-70b-versatile",
+    messages: [
+      {
+        role: "system",
+        content: `Schema ${FormSchema}\n\n Identify the next question to ask, prompt the user to continue to complete the Home Visit Report form to assess patient living environment. Be short and concise and just ask one question at a time.`,
+      },
+      ...messages,
+      {
+        role: "user",
+        content: transcript,
+      },
+    ],
+  });
+
+  return completion.choices[0].message.content!
+}
+
 export async function POST(request: Request) {
   console.time("transcribe " + (request.headers.get("x-vercel-id") || "local"));
 
@@ -36,6 +74,17 @@ export async function POST(request: Request) {
   console.time(
     "text completion " + (request.headers.get("x-vercel-id") || "local")
   );
+
+  let response = "";
+  const isQuestion = transcript.trim().includes("?");
+  const isWelcome = transcript.trim() == "Hello";
+  if (isWelcome) {
+    response = "Hi, my name is Lisa, I can guide you to complete your Home Visit Report. You can start by describing the patient profile."
+  } else  if (isQuestion) {
+    response = await answerQuestion(transcript, data.message);
+  } else {
+    response = await nextQuestion(transcript, data.message)
+  }
 
   const FormFillingPrompt = `Schema:\n${JSON.stringify(
     FormSchema
@@ -101,27 +150,6 @@ export async function POST(request: Request) {
   }
 
   console.log(fillForm);
-
-  const completion = await groq.chat.completions.create({
-    model: "llama-3.1-70b-versatile",
-    messages: [
-      {
-        role: "system",
-        content: `Schema ${FormSchema}\n\n Identify the next question to ask, prompt the user to continue to complete the Home Visit Report form to assess patient living environment. Be short and concise and just ask one question at a time.`,
-      },
-      ...data.message,
-      {
-        role: "user",
-        content: transcript,
-      },
-    ],
-  });
-
-  let response = (
-    transcript == "Hello"
-      ? "Hi, my name is Lisa, I can guide you to complete your Home Visit Report. You can start by describing the patient profile."
-      : completion.choices[0].message.content
-  )!;
 
   console.timeEnd(
     "text completion " + (request.headers.get("x-vercel-id") || "local")
