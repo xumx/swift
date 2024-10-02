@@ -6,6 +6,13 @@ import voices from "@/lib/embedding";
 import { FormSchema } from "@/components/form-schema";
 
 const groq = new Groq();
+const GROQ_MODELS = {
+  vision: "llama-3.2-11b-vision-preview",
+  text: "llama-3.2-90b-text-preview",
+  speech: "distil-whisper-large-v3-en",
+  speech_multi: "whisper-large-v3",
+  backup: "llama-3.1-70b-versatile"
+}
 
 const schema = zfd.formData({
   input: z.union([zfd.text(), zfd.file()]),
@@ -46,8 +53,7 @@ export async function POST(request: Request) {
   let fillForm = "";
   try {
     const formCompletion = await groq.chat.completions.create({
-      model: "llama-3.1-70b-versatile",
-      // model: "llama-3.1-8b-instant",
+      model: GROQ_MODELS.text,
       response_format: { type: "json_object" },
       stream: false,
       messages: [
@@ -72,7 +78,7 @@ export async function POST(request: Request) {
 		console.warn(error.failed_generation);
 		console.warn("Invalid JSON, Attempt Retry");
         const retryCompletion = await groq.chat.completions.create({
-          model: "llama-3.1-70b-versatile",
+          model: GROQ_MODELS.text,
           response_format: { type: "json_object" },
           stream: false,
           messages: [
@@ -103,7 +109,7 @@ export async function POST(request: Request) {
   console.log(fillForm);
 
   const completion = await groq.chat.completions.create({
-    model: "llama-3.1-70b-versatile",
+    model: GROQ_MODELS.text,
     messages: [
       {
         role: "system",
@@ -198,7 +204,7 @@ async function getTranscript(input: string | File) {
       prompt: "Singapore Healthcare topics, use British spelling",
       // model: "whisper-large-v3",
       // language: "en",
-      model: "distil-whisper-large-v3-en",
+      model: GROQ_MODELS.speech,
       language: "en",
     });
 
