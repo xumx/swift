@@ -1,11 +1,12 @@
 "use client";
 
-import clsx from "clsx";
 import { useActionState, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { EnterIcon, LoadingIcon } from "@/lib/icons";
 import { usePlayer } from "@/lib/usePlayer";
 import { track } from "@vercel/analytics";
+
+// Add this new import for the loading indicator
+import { LoadingIndicator } from "@/components/ui/loading-indicator";
 
 type Message = {
   role: "user" | "assistant";
@@ -16,7 +17,6 @@ type Message = {
 import { MultiStepFormComponent } from "@/components/multi-step-form";
 import { sampleData } from "@/lib/sample";
 import { AudioRecorderComponent } from "@/components/audio-recorder";
-// import Image from "next/image";
 
 export default function Home() {
   const [input, setInput] = useState("");
@@ -26,41 +26,6 @@ export default function Home() {
 
   const inputRef = useRef<HTMLInputElement>(null);
   const player = usePlayer();
-
-  const vad = {}
-  // const vad = useMicVAD({
-  //   startOnLoad: false,
-  //   onSpeechEnd: (audio) => {
-  //     player.stop();
-  //     const wav = utils.encodeWAV(audio);
-  //     const blob = new Blob([wav], { type: "audio/wav" });
-  //     submit(blob);
-  //     vad.pause();
-  //   },
-  //   onSpeechStart() {
-  //     player.stop();
-  //   },
-  //   workletURL: "/vad.worklet.bundle.min.js",
-  //   modelURL: "/silero_vad.onnx",
-  //   positiveSpeechThreshold: 0.6,
-  //   minSpeechFrames: 4,
-  //   ortConfig(ort: typeof ORT) {
-  //     console.log(ort.env);
-  //     const isSafari = /^((?!chrome|android).)*safari/i.test(
-  //       navigator.userAgent
-  //     );
-
-  //     ort.env.wasm = {
-  //       wasmPaths: {
-  //         "ort-wasm-simd-threaded.wasm": "/ort-wasm-simd-threaded.wasm",
-  //         "ort-wasm-simd.wasm": "/ort-wasm-simd.wasm",
-  //         "ort-wasm.wasm": "/ort-wasm.wasm",
-  //         "ort-wasm-threaded.wasm": "/ort-wasm-threaded.wasm",
-  //       },
-  //       numThreads: isSafari ? 1 : 4,
-  //     };
-  //   },
-  // });
 
   useEffect(() => {
     function keyDown(e: KeyboardEvent) {
@@ -247,32 +212,9 @@ export default function Home() {
 
   return (
     <div className="flex flex-col min-h-screen p-4 sm:p-12 font-[family-name:var(--font-geist-sans)] w-full sm:w-4/5 mx-auto">
-      <header className="mb-4">
-        <form
-          className="rounded-full bg-neutral-200/80 dark:bg-neutral-800/80 flex items-center w-full border border-transparent hover:border-neutral-300 focus-within:border-neutral-400 hover:focus-within:border-neutral-400 dark:hover:border-neutral-700 dark:focus-within:border-neutral-600 dark:hover:focus-within:border-neutral-600"
-          onSubmit={handleFormSubmit}
-        >
-          <input
-            type="text"
-            className="bg-transparent focus:outline-none p-3 sm:p-4 w-full text-black dark:text-white placeholder:text-neutral-500 dark:placeholder:text-neutral-400"
-            required
-            placeholder="Ask me anything"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            ref={inputRef}
-          />
-
-          <button
-            type="submit"
-            className="p-3 sm:p-4 text-neutral-700 hover:text-black dark:text-neutral-300 dark:hover:text-white"
-            disabled={isPending}
-            aria-label="Submit"
-          >
-            {isPending ? <LoadingIcon /> : <EnterIcon />}
-          </button>
-        </form>
-      </header>
-
+      {/* Add the LoadingIndicator component here */}
+      {isPending && <LoadingIndicator />}
+      
       <main className="flex-grow overflow-y-auto">
         <MultiStepFormComponent
           formData={formData}
@@ -280,7 +222,6 @@ export default function Home() {
           step={step}
           setStep={setStep}
         />
-
         <div className="flex justify-center w-full mt-4">
           <div className="text-neutral-400 dark:text-neutral-600 text-center max-w-xl text-balance space-y-4">
             {messages.length > 0 && (

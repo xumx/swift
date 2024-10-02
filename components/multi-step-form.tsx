@@ -8,6 +8,8 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { BackgroundGradient } from "@/components/ui/background-gradient";
+
 import { cn } from "@/lib/utils"
 
 interface MultiStepFormProps {
@@ -29,18 +31,17 @@ export function MultiStepFormComponent({ formData, setFormData, step, setStep }:
     { step: 7, label: "Bedroom" },
     { step: 8, label: "Kitchen" }
   ];
-
   // Navigation bar component
   const renderNavigation = () => (
-    <div className="flex mb-2 overflow-x-auto pb-2 sm:pb-0 sm:flex-wrap">
+    <div className="flex justify-center p-4 overflow-x-auto pb-2 sm:pb-0 sm:flex-wrap scrollbar-hide">
       {steps.map(({ step: stepNumber, label }) => (
         <Button
           key={stepNumber}
           className={cn(
-            "flex-shrink-0 text-xs sm:text-sm px-2 py-1 sm:px-4 sm:py-2 mr-1 mb-1",
+            "flex-shrink-0 text-xs sm:text-sm px-2 py-1 sm:px-4 sm:py-2 mr-2 mb-1",
             step === stepNumber ? "bg-white text-black" : "bg-transparent text-black"
           )}
-          onClick={(e) => {setStep(stepNumber); e.preventDefault();}}
+          onClick={(e) => { setStep(stepNumber); e.preventDefault(); }}
         >
           {label}
         </Button>
@@ -1715,27 +1716,29 @@ export function MultiStepFormComponent({ formData, setFormData, step, setStep }:
 
   return (
     <>
-    {renderNavigation()}
-    <form onSubmit={handleSubmit} className="w-full max-w-3xl mx-auto p-4 space-y-4">
-      
-      <Card>
-        {renderStep()}
-        <CardFooter className="flex justify-between">
-          {step > 1 && (
-            <Button type="button" variant="outline" onClick={handlePrevious}>
-              Previous
-            </Button>
-          )}
-          {step < 12 ? (
-            <Button type="button" onClick={handleNext}>
-              Next
-            </Button>
-          ) : (
-            <Button type="submit">Submit</Button>
-          )}
-        </CardFooter>
-      </Card>
-    </form>
+      {renderNavigation()}
+      <form onSubmit={handleSubmit} className="w-full max-w-3xl mx-auto p-4 space-y-4">
+      <BackgroundGradient className="rounded-[22px] p-4 bg-white dark:bg-zinc-900">
+          <Card>
+            {renderStep()}
+            <CardFooter className="flex justify-between">
+              {step > 1 && (
+                <Button type="button" variant="outline" onClick={handlePrevious}>
+                  Previous
+                </Button>
+              )}
+              {step < 12 ? (
+                <Button type="button" onClick={handleNext}>
+                  Next
+                </Button>
+              ) : (
+                <Button type="submit">Submit</Button>
+              )}
+            </CardFooter>
+          </Card>
+          </BackgroundGradient>
+
+      </form>
     </>
   )
 }
