@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { cn } from "@/lib/utils"
 
 interface MultiStepFormProps {
   formData: any;
@@ -31,11 +32,14 @@ export function MultiStepFormComponent({ formData, setFormData, step, setStep }:
 
   // Navigation bar component
   const renderNavigation = () => (
-    <div className="flex mb-2">
+    <div className="flex mb-2 overflow-x-auto pb-2 sm:pb-0 sm:flex-wrap">
       {steps.map(({ step: stepNumber, label }) => (
         <Button
           key={stepNumber}
-          className={step === stepNumber ? "bg-white text-black" : "bg-transparent text-black"}
+          className={cn(
+            "flex-shrink-0 text-xs sm:text-sm px-2 py-1 sm:px-4 sm:py-2 mr-1 mb-1",
+            step === stepNumber ? "bg-white text-black" : "bg-transparent text-black"
+          )}
           onClick={(e) => {setStep(stepNumber); e.preventDefault();}}
         >
           {label}

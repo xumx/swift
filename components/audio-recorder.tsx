@@ -3,6 +3,7 @@
 import React, { useState, useRef, useCallback } from 'react'
 import { Button } from "@/components/ui/button"
 import { Mic, Square } from "lucide-react"
+import { cn } from "@/lib/utils";
 
 interface AudioRecorderProps {
   onSubmit: (audioBlob: Blob) => void
@@ -117,21 +118,22 @@ export function AudioRecorderComponent({ onSubmit }: AudioRecorderProps) {
   }
 
   return (
-    <div className="flex flex-col items-center justify-center">
+    <div className="fixed bottom-4 right-4 z-50">
       <Button
-        className={`w-24 h-24 rounded-full flex items-center justify-center ${
+        className={cn(
+          "w-16 h-16 rounded-full flex items-center justify-center",
           isRecording ? 'bg-red-500 hover:bg-red-600' : 'bg-blue-500 hover:bg-blue-600'
-        }`}
+        )}
         onClick={isRecording ? stopRecording : startRecording}
       >
         {isRecording ? (
-          <Square className="w-8 h-8 text-white" />
+          <Square className="w-6 h-6 sm:w-8 sm:h-8 text-white" />
         ) : (
-          <Mic className="w-8 h-8 text-white" />
+          <Mic className="w-6 h-6 sm:w-8 sm:h-8 text-white" />
         )}
       </Button>
-      <p className="mt-2 text-sm font-medium text-gray-700">
-        {isRecording ? 'Recording... Tap to stop' : 'Tap to record'}
+      <p className="mt-2 text-xs sm:text-sm font-medium text-gray-700 text-center">
+        {isRecording ? 'Recording...' : ''}
       </p>
     </div>
   )

@@ -246,19 +246,15 @@ export default function Home() {
   }
 
   return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen sm:p-12 font-[family-name:var(--font-geist-sans)] w-full sm:w-4/5 mx-auto">
-      <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start w-full">
-        <div className="flex justify-center w-full">
-          <AudioRecorderComponent onSubmit={submit} />
-        </div>
-
+    <div className="flex flex-col min-h-screen p-4 sm:p-12 font-[family-name:var(--font-geist-sans)] w-full sm:w-4/5 mx-auto">
+      <header className="mb-4">
         <form
           className="rounded-full bg-neutral-200/80 dark:bg-neutral-800/80 flex items-center w-full border border-transparent hover:border-neutral-300 focus-within:border-neutral-400 hover:focus-within:border-neutral-400 dark:hover:border-neutral-700 dark:focus-within:border-neutral-600 dark:hover:focus-within:border-neutral-600"
           onSubmit={handleFormSubmit}
         >
           <input
             type="text"
-            className="bg-transparent focus:outline-none p-4 w-full text-black dark:text-white placeholder:text-neutral-500 dark:placeholder:text-neutral-400"
+            className="bg-transparent focus:outline-none p-3 sm:p-4 w-full text-black dark:text-white placeholder:text-neutral-500 dark:placeholder:text-neutral-400"
             required
             placeholder="Ask me anything"
             value={input}
@@ -268,14 +264,16 @@ export default function Home() {
 
           <button
             type="submit"
-            className="p-4 text-neutral-700 hover:text-black dark:text-neutral-300 dark:hover:text-white"
+            className="p-3 sm:p-4 text-neutral-700 hover:text-black dark:text-neutral-300 dark:hover:text-white"
             disabled={isPending}
             aria-label="Submit"
           >
             {isPending ? <LoadingIcon /> : <EnterIcon />}
           </button>
         </form>
+      </header>
 
+      <main className="flex-grow overflow-y-auto">
         <MultiStepFormComponent
           formData={formData}
           setFormData={setFormData}
@@ -283,8 +281,8 @@ export default function Home() {
           setStep={setStep}
         />
 
-        <div className="flex justify-center w-full pt-100px">
-          <div className="text-neutral-400 dark:text-neutral-600 pt-4 text-center max-w-xl text-balance min-h-28 space-y-4">
+        <div className="flex justify-center w-full mt-4">
+          <div className="text-neutral-400 dark:text-neutral-600 text-center max-w-xl text-balance space-y-4">
             {messages.length > 0 && (
               <p>
                 {messages.at(-1)?.content}
@@ -294,33 +292,13 @@ export default function Home() {
                 </span>
               </p>
             )}
-
-            {/* {messages.length === 0 && (
-              <>
-                {vad.loading ? (
-                  <p>Loading speech detection...</p>
-                ) : vad.errored ? (
-                  <p>Failed to load speech detection.</p>
-                ) : (
-                  <></>
-                )}
-              </>
-            )} */}
           </div>
         </div>
-
-        {/* <div
-          className={clsx(
-            "absolute size-36 blur-3xl rounded-full bg-gradient-to-b from-red-200 to-red-400 dark:from-red-600 dark:to-red-800 -z-50 transition ease-in-out pt-100px",
-            {
-              "opacity-0": vad.loading || vad.errored,
-              "opacity-30": !vad.loading && !vad.errored && !vad.userSpeaking,
-              "opacity-100 scale-110": vad.userSpeaking,
-            }
-          )}
-        /> */}
       </main>
-      <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center "></footer>
+
+      <footer className="mt-4">
+        <AudioRecorderComponent onSubmit={submit} />
+      </footer>
     </div>
   );
 }
