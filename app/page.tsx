@@ -211,7 +211,7 @@ export default function Home() {
   }
 
   return (
-    <div className="flex flex-col min-h-screen p-4 sm:p-12 font-[family-name:var(--font-geist-sans)] w-full sm:w-4/5 mx-auto">
+    <div className="flex flex-col min-h-screen font-[family-name:var(--font-geist-sans)] w-full sm:w-4/5 mx-auto">
       {/* Add the LoadingIndicator component here */}
       {isPending && <LoadingIndicator />}
       

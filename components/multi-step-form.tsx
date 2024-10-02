@@ -1717,8 +1717,8 @@ export function MultiStepFormComponent({ formData, setFormData, step, setStep }:
   return (
     <>
       {renderNavigation()}
-      <form onSubmit={handleSubmit} className="w-full max-w-3xl mx-auto p-4 space-y-4">
-      <BackgroundGradient className="rounded-[22px] p-4 bg-white dark:bg-zinc-900">
+      <form onSubmit={handleSubmit} className="w-full max-w-3xl mx-auto mt-4 p-2 sm:p-8 space-y-4">
+        <BackgroundGradient className="rounded-[22px] bg-white dark:bg-zinc-900">
           <Card>
             {renderStep()}
             <CardFooter className="flex justify-between">
@@ -1736,8 +1736,7 @@ export function MultiStepFormComponent({ formData, setFormData, step, setStep }:
               )}
             </CardFooter>
           </Card>
-          </BackgroundGradient>
-
+        </BackgroundGradient>
       </form>
     </>
   )
