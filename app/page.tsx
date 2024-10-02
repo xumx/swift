@@ -226,7 +226,7 @@ export default function Home() {
   function handleFormSubmit(e: React.FormEvent) {
     e.preventDefault();
     console.log("Form data:", formData);
-    submit();
+    submit(input);
   }
 
   const addSampleData = (sectionName: string) => {
