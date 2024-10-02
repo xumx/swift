@@ -169,39 +169,51 @@ export default function Home() {
         ...prevData,
         ...formFillData,
       }));
+
+      setInput(transcript);
+
+      return [
+        ...prevMessages,
+        {
+          role: "user",
+          content: transcript,
+        },
+      ];
     }
 
-    const text = decodeURIComponent(response.headers.get("X-Response") || "");
+    if (response.headers.get("X-Response")) {
+      const text = decodeURIComponent(response.headers.get("X-Response") || "");
 
-    if (!response.ok || !transcript || !text || !response.body) {
-      if (response.status === 429) {
-        toast.error("Too many requests. Please try again later.");
-      } else {
-        toast.error((await response.text()) || "An error occurred.");
+      if (!response.ok || !transcript || !text || !response.body) {
+        if (response.status === 429) {
+          toast.error("Too many requests. Please try again later.");
+        } else {
+          toast.error((await response.text()) || "An error occurred.");
+        }
+
+        return prevMessages;
       }
 
-      return prevMessages;
+      const latency = Date.now() - submittedAt;
+      player.play(response.body, () => {
+        // const isFirefox = navigator.userAgent.includes("Firefox");
+        // if (isFirefox) vad.start();
+      });
+      setInput(transcript);
+
+      return [
+        ...prevMessages,
+        {
+          role: "user",
+          content: transcript,
+        },
+        {
+          role: "assistant",
+          content: text,
+          latency,
+        },
+      ];
     }
-
-    const latency = Date.now() - submittedAt;
-    player.play(response.body, () => {
-      // const isFirefox = navigator.userAgent.includes("Firefox");
-      // if (isFirefox) vad.start();
-    });
-    setInput(transcript);
-
-    return [
-      ...prevMessages,
-      {
-        role: "user",
-        content: transcript,
-      },
-      {
-        role: "assistant",
-        content: text,
-        latency,
-      },
-    ];
   }, []);
 
   function handleFormSubmit(e: React.FormEvent) {

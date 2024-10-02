@@ -35,7 +35,7 @@ export function MultiStepFormComponent({ formData, setFormData, step, setStep }:
       {steps.map(({ step: stepNumber, label }) => (
         <Button
           key={stepNumber}
-          className={step === stepNumber ? "bg-white text-black" : "bg-transparent"}
+          className={step === stepNumber ? "bg-white text-black" : "bg-transparent text-black"}
           onClick={(e) => {setStep(stepNumber); e.preventDefault();}}
         >
           {label}
