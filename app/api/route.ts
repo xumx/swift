@@ -6,6 +6,13 @@ import voices from "@/lib/embedding";
 import { FormSchema } from "@/components/form-schema";
 
 const groq = new Groq();
+const GROQ_MODELS = {
+  vision: "llama-3.2-11b-vision-preview",
+  text: "llama-3.2-90b-text-preview",
+  speech: "distil-whisper-large-v3-en",
+  speech_multi: "whisper-large-v3",
+  backup: "llama-3.1-70b-versatile"
+}
 
 const schema = zfd.formData({
   input: z.union([zfd.text(), zfd.file()]),
@@ -22,7 +29,7 @@ const schema = zfd.formData({
 
 async function answerQuestion(transcript: string, messages: any[]) {
   const completion = await groq.chat.completions.create({
-    model: "llama-3.1-70b-versatile",
+    model: GROQ_MODELS.text,
     messages: [
       {
         role: "system",
@@ -41,7 +48,7 @@ async function answerQuestion(transcript: string, messages: any[]) {
 
 async function nextQuestion(transcript: string, messages: any[]) {
   const completion = await groq.chat.completions.create({
-    model: "llama-3.1-70b-versatile",
+    model: GROQ_MODELS.text,
     messages: [
       {
         role: "system",
@@ -83,73 +90,78 @@ export async function POST(request: Request) {
   } else  if (isQuestion) {
     response = await answerQuestion(transcript, data.message);
   } else {
-    response = await nextQuestion(transcript, data.message)
-  }
-
-  const FormFillingPrompt = `Schema:\n${JSON.stringify(
-    FormSchema
-  )}\n\nCurrent Data\n${JSON.stringify(
-    data.formData
-  )}\n\nPlease fill in the form based on the fields provided. Always outputs JSON values in English. Responds in JSON format`;
-
-  let fillForm = "";
-  try {
-    const formCompletion = await groq.chat.completions.create({
-      model: "llama-3.1-70b-versatile",
-      // model: "llama-3.1-8b-instant",
-      response_format: { type: "json_object" },
-      stream: false,
-      messages: [
-        {
-          role: "system",
-          content: FormFillingPrompt,
-        },
-        ...data.message,
-        {
-          role: "user",
-          content: transcript,
-        },
-      ],
-    });
-
-    fillForm = formCompletion.choices[0].message.content!;
-  } catch (err: any) {
-	  const error = err.error.error
-	  console.log(error.code)
-    if (error.code == "json_validate_failed") {
-      try {
-		console.warn(error.failed_generation);
-		console.warn("Invalid JSON, Attempt Retry");
-        const retryCompletion = await groq.chat.completions.create({
-          model: "llama-3.1-70b-versatile",
-          response_format: { type: "json_object" },
-          stream: false,
-          messages: [
-            {
-              role: "system",
-              content: FormFillingPrompt,
-            },
-            ...data.message,
-            {
-              role: "user",
-              content: transcript,
-            },
-            {
-              role: "assistant",
-              content:
-                `The previous attempt failed with invalid JSON ${error.failed_generation}. Please try again to generate a valid JSON response.`,
-            },
-          ],
-        });
-        fillForm = retryCompletion.choices[0].message.content!;
-      } catch (retryError) {
-        console.error("Retry failed:", (retryError as any).message);
-        fillForm = "{}"; // Fallback to empty object if retry also fails
+    // response = await nextQuestion(transcript, data.message);
+    const FormFillingPrompt = `Schema:\n${JSON.stringify(
+      FormSchema
+    )}\n\nCurrent Data\n${JSON.stringify(
+      data.formData
+    )}\n\nPlease fill in the form based on the fields provided. Always outputs JSON values in English. Responds in JSON format`;
+  
+    let fillForm = "";
+    try {
+      const formCompletion = await groq.chat.completions.create({
+        model: GROQ_MODELS.text,
+        response_format: { type: "json_object" },
+        stream: false,
+        messages: [
+          {
+            role: "system",
+            content: FormFillingPrompt,
+          },
+          ...data.message,
+          {
+            role: "user",
+            content: transcript,
+          },
+        ],
+      });
+  
+      fillForm = formCompletion.choices[0].message.content!;
+    } catch (err: any) {
+      const error = err.error.error
+      console.log(error.code)
+      if (error.code == "json_validate_failed") {
+        try {
+      console.warn(error.failed_generation);
+      console.warn("Invalid JSON, Attempt Retry");
+          const retryCompletion = await groq.chat.completions.create({
+            model: GROQ_MODELS.text,
+            response_format: { type: "json_object" },
+            stream: false,
+            messages: [
+              {
+                role: "system",
+                content: FormFillingPrompt,
+              },
+              ...data.message,
+              {
+                role: "user",
+                content: transcript,
+              },
+              {
+                role: "assistant",
+                content:
+                  `The previous attempt failed with invalid JSON ${error.failed_generation}. Please try again to generate a valid JSON response.`,
+              },
+            ],
+          });
+          fillForm = retryCompletion.choices[0].message.content!;
+        } catch (retryError) {
+          console.error("Retry failed:", (retryError as any).message);
+          fillForm = "{}"; // Fallback to empty object if retry also fails
+        }
       }
     }
-  }
+  
+    console.log(fillForm);
 
-  console.log(fillForm);
+    return new Response(null, {
+      headers: {
+        "X-Transcript": encodeURIComponent(transcript),
+        "X-Formdata": encodeURIComponent(fillForm!),
+      },
+    });
+  }
 
   console.timeEnd(
     "text completion " + (request.headers.get("x-vercel-id") || "local")
@@ -211,8 +223,7 @@ export async function POST(request: Request) {
   return new Response(voice.body, {
     headers: {
       "X-Transcript": encodeURIComponent(transcript),
-      "X-Response": encodeURIComponent(response!),
-      "X-Formdata": encodeURIComponent(fillForm!),
+      "X-Response": encodeURIComponent(response!)
     },
   });
 }
@@ -226,7 +237,7 @@ async function getTranscript(input: string | File) {
       prompt: "Singapore Healthcare topics, use British spelling",
       // model: "whisper-large-v3",
       // language: "en",
-      model: "distil-whisper-large-v3-en",
+      model: GROQ_MODELS.speech,
       language: "en",
     });
 
