@@ -8,10 +8,8 @@ import { FormSchema } from "@/components/form-schema";
 const groq = new Groq();
 const GROQ_MODELS = {
   vision: "llama-3.2-11b-vision-preview",
-  text: "llama-3.2-90b-text-preview",
-  speech: "distil-whisper-large-v3-en",
-  speech_multi: "whisper-large-v3",
-  backup: "llama-3.1-70b-versatile"
+  text: "llama-3.3-70b-versatile",
+  speech: "whisper-large-v3-turbo",
 }
 
 const schema = zfd.formData({
@@ -235,8 +233,6 @@ async function getTranscript(input: string | File) {
     const { text } = await groq.audio.transcriptions.create({
       file: input,
       prompt: "Singapore Healthcare topics, use British spelling",
-      // model: "whisper-large-v3",
-      // language: "en",
       model: GROQ_MODELS.speech,
       language: "en",
     });
