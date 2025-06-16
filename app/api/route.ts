@@ -1,11 +1,8 @@
 import { NextResponse } from "next/server";
 import Groq from "groq-sdk";
-import { PROMPTS } from '@/lib/prompt';
-import { extractAppointmentDetails, sendWhatsAppConfirmation, roleplayProfile as WhatsAppProfile } from '@/lib/whatsappService';
 import { generateSpeech } from '@/lib/elevenlabs';
-import { Readable } from "stream";
 import { getTranscript } from '@/lib/whisper';
-import { scenarioDefinitions, getScenarioDefinitionById, ScenarioDefinition } from '@/lib/scenarios'; // Added for START_SESSION
+import { getScenarioDefinitionById,  } from '@/lib/scenarios'; // Added for START_SESSION
 import { Persona, getPersonaById } from '@/lib/personas';
 import { GoogleGenAI } from "@google/genai";
 import { PERSONA_PROMPTS } from "@/lib/prompt/persona";
@@ -27,182 +24,110 @@ interface ParsedRequestData {
   roleplayProfile: Persona | null;
   transcript: string;
   allMessages: Message[];
+  difficultyProfile?: string | null;
   scenarioId?: string;
-  action?: string; // Added for START_SESSION
 }
 
-async function parseIncomingRequest(req: Request, requestId: string): Promise<ParsedRequestData> {
+async function parseIncomingRequest(
+  req: Request,
+  requestId: string
+): Promise<ParsedRequestData> {
   console.log(`[${requestId}] Parsing incoming request...`);
   const formData = await req.formData();
+
+  // 1. `input`
   let input: any = formData.get("input");
-  const historyString = formData.get("message") as string | null;
-  const roleplayProfileString = formData.get("roleplayProfile") as string | null;
-  const scenario = formData.get("scenario") as string | null || "";
-
-  let scenarioId = "";
-  try {
-    scenarioId = JSON.parse(scenario)?.id || "";
-    console.log(`[${requestId}] Scenario ID: ${scenarioId}`);
-  } catch (error) {
-    console.error(`[${requestId}] Error parsing scenario ID:`, error);
-  }
-
   if (!input) {
     console.error(`[${requestId}] No input found in formData.`);
     throw new Error("Input is required");
   }
 
+  // 2. `history`
+  const historyString = formData.get("message") as string | null;
   let history: Message[] = [];
   if (historyString) {
     try {
       history = JSON.parse(historyString);
     } catch (e) {
-      console.warn(`[${requestId}] Error parsing history JSON, proceeding with empty history:`, e);
+      console.warn(
+        `[${requestId}] Error parsing history JSON, proceeding with empty history:`,
+        e
+      );
     }
   }
 
-  let transcript: any = input;
-  if (input instanceof File) {
-    transcript = await getTranscript(input);
-    input = transcript;
-  }
-
-  let allMessages: Message[] = [...history];
-  allMessages.push({ role: "advisor", content: input });
-
+  // 3. `roleplayProfile`
+  const roleplayProfileString = formData.get(
+    "roleplayProfile"
+  ) as string | null;
   let roleplayProfile: Persona | null = null;
   if (roleplayProfileString) {
     try {
       roleplayProfile = JSON.parse(roleplayProfileString) as Persona;
-      console.log(`[${requestId}] Parsed persona profile for: ${roleplayProfile.name}`);
+      console.log(
+        `[${requestId}] Parsed persona profile for: ${roleplayProfile.name}`
+      );
     } catch (e) {
-      console.warn(`[${requestId}] Error parsing persona profile JSON, proceeding without profile:`, e);
+      console.warn(
+        `[${requestId}] Error parsing persona profile JSON, proceeding without profile:`,
+        e
+      );
     }
   }
 
-  return { input, history, roleplayProfile, transcript, allMessages, scenarioId }; // Added action
-}
-
-function buildCallerInfoString(roleplayProfile: Persona | null): string {
-    if (!roleplayProfile) return "";
-    return `\n\nCaller Information:\nName: ${roleplayProfile.name}`;
-}
-
-// async function getIntentClassification(messages: Message[], roleplayProfile: roleplayProfile | null, requestId: string): Promise<string> {
-//   console.log(`[${requestId}] Getting intent classification...`);
-//   const classificationPrompt = `${PROMPTS.Classify}`;
-
-//   console.log(messages);
-
-//   try {
-//     const chatCompletion = await groq.chat.completions.create({
-//       messages: [
-//         { role: "system", content: classificationPrompt },
-//         ...messages,
-//       ],
-//       model: "meta-llama/llama-4-maverick-17b-128e-instruct", // Use a smaller model for classification
-//       temperature: 0.1,
-//     });
-//     const intent = chatCompletion.choices[0]?.message?.content?.trim().toUpperCase() || "UNKNOWN";
-//     console.log(`[${requestId}] Classified intent: ${intent}`);
-//     return intent;
-//   } catch (error) {
-//     console.error(`[${requestId}] Error during intent classification:`, error);
-//     throw new Error("Failed to classify intent");
-//   }
-// }
-
-async function generateNextTurnSuggestions(
-  conversationHistory: Message[],
-  aiLastResponse: string,
-  requestId: string
-): Promise<string[]> {
-  console.log(`[${requestId}] Generating next turn suggestions with Gemini...`);
-
-  const historyString = conversationHistory
-    .map(m => `${m.role}: ${m.content}`)
-    .join('\n');
-
-  const suggestionPrompt = `
-You are an AI assistant coaching a Financial Advisor. Based on the transcript below, generate exactly two distinct, concise, and actionable prompts the Advisor can say next.  
-
-Requirements:
-- Perspective: Advisor (not the client)
-- Format: Raw JSON array of two strings, e.g. ["…","…"]
-- No markdown, fences, labels, or extra text
-- ≤15 words per suggestion
-- Address the client’s last concern directly
-
-Conversation History (Advisor → Client):
----
-${historyString}
----
-Client’s Last Response:
-${aiLastResponse}
-
-Now provide two next-step suggestions for the Advisor.
-`;
-
+  // 4. `scenarioId`
+  const scenarioString = (formData.get("scenario") as string | null) || "";
+  let scenarioId = "";
   try {
-    // Call Gemini Flash 2.5
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash-preview-05-20",
-      contents: suggestionPrompt
-    });
-
-    const rawSuggestions = response.text?.trim() ?? "";
-    console.log(`[${requestId}] Raw suggestions from Gemini: ${rawSuggestions}`);
-
-    // Try JSON parse first
-    try {
-      const suggestionsArray = JSON.parse(rawSuggestions);
-      if (Array.isArray(suggestionsArray) &&
-          suggestionsArray.length === 2 &&
-          suggestionsArray.every(s => typeof s === 'string')) {
-        console.log(`[${requestId}] Parsed suggestions:`, suggestionsArray);
-        return suggestionsArray;
-      }
-    } catch (e) {
-      console.warn(`[${requestId}] JSON parse failed, falling back to line split`);
-    }
-
-    // Fallback: extract first two non-empty lines
-    const lines = rawSuggestions
-      .split('\n')
-      .map(line => line.replace(/^\d+\.\s*/, '').trim())
-      .filter(line => line.length > 0);
-
-    if (lines.length >= 2) {
-      return [lines[0], lines[1]];
-    }
-
-    console.warn(`[${requestId}] Could not parse suggestions, returning empty array.`);
-    return [];
-  } catch (error) {
-    console.error(`[${requestId}] Error generating next turn suggestions with Gemini:`, error);
-    return [];
+    scenarioId = JSON.parse(scenarioString)?.id || "";
+    console.log(`[${requestId}] Scenario ID: ${scenarioId}`);
+  } catch (e) {
+    console.error(`[${requestId}] Error parsing scenario ID:`, e);
   }
+
+  // 5. `difficultyProfile` must be a non-empty string
+  const diffRaw = formData.get("difficultyProfile");
+  let difficultyProfile: string | null = null;
+  if (typeof diffRaw === "string" && diffRaw.trim().length > 0) {
+    difficultyProfile = diffRaw;
+  } else {
+    console.error(
+      `[${requestId}] difficultyProfile missing or invalid in formData.`
+    );
+    throw new Error("difficultyProfile is required");
+  }
+
+  // 6. If `input` is a File, run STT
+  let transcript: string = input;
+  if (input instanceof File) {
+    transcript = (await getTranscript(input)) ?? "";
+    input = transcript;
+  }
+
+  // 7. Build `allMessages`
+  const allMessages: Message[] = [...history, { role: "advisor", content: input }];
+
+  return {
+    input,
+    history,
+    roleplayProfile,
+    transcript,
+    allMessages,
+    difficultyProfile,
+    scenarioId,
+  };
 }
+
 
 async function generateMainAiTextResponse(
   messages: Message[],
-  intent: string,
   roleplayProfile: Persona | null,
-  originalQuery: string,
   requestId: string,
-  scenarioId?: string
+  difficultyProfile: string,
+  scenarioId?: string,
 ): Promise<string> {
   console.log(`[${requestId}] Generating main AI text response with Gemini, scenario: ${scenarioId}. Messages count: ${messages.length}`);
 
-  // 1. pick the system prompt as you already do --------
-  // let systemPromptContent = "";
-  // if (scenarioId === 'REFERRAL_ANNUAL_REVIEW') {
-  //   systemPromptContent = PROMPTS.trainingReferralPrompt;
-  // } else if (scenarioId === 'INSURANCE_REJECTION_HANDLING') {
-  //   systemPromptContent = PROMPTS.trainingInsuranceRejectionPrompt;
-  // } else {
-  //   systemPromptContent = PROMPTS.trainingReferralPrompt;
-  // }
   let systemPromptContent = "";
   if (roleplayProfile?.id == "LIANG_CHEN") {
     systemPromptContent = PERSONA_PROMPTS.LIANG_CHEN;
@@ -213,30 +138,32 @@ async function generateMainAiTextResponse(
   } else {
     systemPromptContent = PERSONA_PROMPTS.LIANG_CHEN; // Default system prompt
   }
+  
+  // Now append the profile with the difficulty profile
+  systemPromptContent = `
+  ${systemPromptContent.trim()}
 
-  // 2. build full prompt (system + conversation) -------
-  // const fullPrompt = [
-  //   { role: "system", content: systemPromptContent },
-  //   ...messages
-  // ].map(m => `${m.role}: ${m.content}`).join("\n");
+  ## Difficulty Profile:
+  ${difficultyProfile.trim()}
 
-  // 3. call Gemini & time it ---------------------------
-  // try {
-  //   const resp = await ai.models.generateContent({
-  //     model: "gemini-2.5-flash-preview-05-20",
-  //     contents: fullPrompt
-  //   });
-  //   const latencyMs = Date.now() - t0;
-  //   console.log(`[${requestId}] Gemini response latency: ${latencyMs} ms`);
+  ## Response-Length & Brevity Rules
 
-  //   const aiResponse = resp.text?.trim() || "";
-  //   if (!aiResponse) throw new Error("Gemini returned empty response");
-  //   console.log(`[${requestId}] Gemini main response: "${aiResponse.substring(0, 100)}..."`);
-  //   return aiResponse;
-  // } catch (err) {
-  //   console.error(`[${requestId}] Error from Gemini:`, err);
-  //   throw new Error("Failed to get main AI response (Gemini)");
-  // }
+  1. **Mirror Turn-Length**  
+    - If the user’s last turn is very short (< 10 words), keep your reply under 2 sentences.  
+    - If the user speaks at medium length (10–30 words), limit your reply to 3–4 sentences.  
+    - Only go beyond 4 sentences when introducing genuinely new information or critical context.
+
+  2. **Balanced Turn-Taking**  
+    - Don’t overwhelm a short user prompt with a long monologue.  
+    - Match your response density to the user’s: brief in response to brief, more expansive when the user asks “why” or “how.”
+
+  3. **Human Tone**  
+    - Write as you would speak in a natural conversation—avoid overly formal or academic phrasing.  
+    - Use contractions and everyday language.
+
+  > **Remember:** brevity isn’t brevity’s enemy—be clear and concise, elaborating *only* when it truly adds value.  
+
+  `;
 
   // 1. Separate out the last message
   const lastMsgObj = messages[messages.length - 1];
@@ -300,106 +227,89 @@ async function convertTextToSpeech(text: string, requestId: string, voice: strin
   }
 }
 
-async function handleAppointmentWorkflowInBackground(fullTranscript: string, roleplayProfile: Persona | null, requestId: string): Promise<void> {
-  if (!roleplayProfile) {
-    console.log(`[${requestId}] No persona profile, skipping appointment workflow.`);
-    return;
-  }
-  console.log(`[${requestId}] Starting appointment workflow (background)...`);
-  try {
-    const appointmentDetails = await extractAppointmentDetails(groq, fullTranscript, requestId);
-    if (appointmentDetails && (appointmentDetails.appointment_date || appointmentDetails.appointment_time)) {
-      console.log(`[${requestId}] Appointment details extracted for WhatsApp:`, appointmentDetails);
-      await sendWhatsAppConfirmation(appointmentDetails, roleplayProfile as WhatsAppProfile);
-    } else {
-      console.log(`[${requestId}] No specific appointment details for WhatsApp.`);
-    }
-  } catch (error) {
-    console.error(`[${requestId}] Error in background appointment workflow:`, error);
-  }
-}
-
 export async function POST(req: Request) {
   const requestId = crypto.randomUUID().substring(0, 8);
   console.log(`\n--- [${requestId}] Received POST /api/route ---`);
 
   try {
-    // Step 1: Parse and Validate Incoming Request
-    const { input, roleplayProfile, transcript, allMessages, scenarioId, action } = await parseIncomingRequest(req, requestId);
+    // 1) Parse the request
+    const {
+      input,
+      roleplayProfile,
+      transcript,
+      allMessages,
+      difficultyProfile,
+      scenarioId,
+    } = await parseIncomingRequest(req, requestId);
 
-    // Determine the AI text response based on action type
     let aiTextResponse: string;
-    let effectiveTranscript = transcript;
-    
-    if (input === 'START' && scenarioId) {
-      console.log(`[${requestId}] Handling START_SESSION action for scenario ID: ${scenarioId} for persona: ${roleplayProfile?.name}`);
+
+    if (input === "START" && scenarioId) {
+      // Always generate a fresh profile on session start
+
+      // Use scenario opening line for START
       const scenario = getScenarioDefinitionById(scenarioId);
-      if (scenario && scenario.personaOpeningLine) {
-        // Use the persona opening line as the AI response
+      if (scenario?.personaOpeningLine) {
         aiTextResponse = scenario.personaOpeningLine;
-        effectiveTranscript = "SESSION_START"; // No actual user transcript for session start
-        console.log(`[${requestId}] Using personaOpeningLine for START_SESSION: "${aiTextResponse.substring(0, 100)}..."`);
         allMessages.push({ role: "client", content: aiTextResponse });
       } else {
-        console.error(`[${requestId}] Scenario or personaOpeningLine not found for ID: ${scenarioId}`);
-        return NextResponse.json({ error: 'Failed to start session. Scenario details missing.' }, { status: 400 });
+        console.error(
+          `[${requestId}] Scenario or personaOpeningLine not found for ID: ${scenarioId}`
+        );
+        return NextResponse.json(
+          { error: 'Failed to start session. Scenario details missing.' },
+          { status: 400 }
+        );
       }
     } else {
-      // Generate AI response for normal conversation flow
-      aiTextResponse = await generateMainAiTextResponse(allMessages, scenarioId!, roleplayProfile, input, requestId, scenarioId);
-    }
+      if (!difficultyProfile) {
+        console.warn(
+          `[${requestId}] No difficulty profile provided.`
+        );
+        throw new Error(
+          "No difficulty profile found. Please start a new session."
+        );
+      }
 
-    // Step 5: Generate Next Turn Suggestions
-    let suggestionsPromise: Promise<string[]>;
-    // We need to ensure `allMessages` here includes the user's latest input and `aiTextResponse` is the AI's reply to that.
-    // The current `allMessages` in scope is from `parseIncomingRequest` which is user's input + history *before* AI's current response.
-    // So, we form a temporary history for suggestion generation.
-    const historyForSuggestions = [...allMessages, { role: "client" as const, content: aiTextResponse }];
-    suggestionsPromise = generateNextTurnSuggestions(historyForSuggestions, aiTextResponse, requestId);
+      aiTextResponse = await generateMainAiTextResponse(
+        allMessages,
+        roleplayProfile,
+        requestId,
+        difficultyProfile,
+        scenarioId
+      );
+    }
 
     // Step 6: Convert AI Text to Speech
-    let elevenLabsVoiceIdToUse: string;
-    if (roleplayProfile?.elevenLabsVoiceId) {
-      elevenLabsVoiceIdToUse = roleplayProfile.elevenLabsVoiceId;
-      console.log(`[${requestId}] Using voice ID from roleplayProfile: ${elevenLabsVoiceIdToUse}`);
-    } else {
-      const scenarioForVoice = scenarioId ? getScenarioDefinitionById(scenarioId) : undefined;
-      if (scenarioForVoice?.defaultPersonaId) {
-        const defaultPersona = getPersonaById(scenarioForVoice.defaultPersonaId);
-        if (defaultPersona?.elevenLabsVoiceId) {
-          elevenLabsVoiceIdToUse = defaultPersona.elevenLabsVoiceId;
-          console.log(`[${requestId}] Using voice ID from scenario's default persona (${defaultPersona.id}): ${elevenLabsVoiceIdToUse}`);
-        } else {
-          elevenLabsVoiceIdToUse = 'ZyIwtt7dzBKVYuXxaRw7'; // Fallback (e.g., Liang Chen's voice)
-          console.warn(`[${requestId}] Default persona (${defaultPersona?.id}) missing elevenLabsVoiceId. Falling back to default voice ID: ${elevenLabsVoiceIdToUse}`);
-        }
-      } else {
-        elevenLabsVoiceIdToUse = 'ZyIwtt7dzBKVYuXxaRw7'; // Fallback (e.g., Liang Chen's voice)
-        console.warn(`[${requestId}] No roleplayProfile or scenario default persona with voice ID. Falling back to default voice ID: ${elevenLabsVoiceIdToUse}`);
-      }
-    }
-    const audioStream = await convertTextToSpeech(aiTextResponse, requestId, elevenLabsVoiceIdToUse);
+    const voiceId =
+      roleplayProfile?.elevenLabsVoiceId ||
+      getPersonaById(getScenarioDefinitionById(scenarioId!)!.defaultPersonaId)
+        ?.elevenLabsVoiceId ||
+      'ZyIwtt7dzBKVYuXxaRw7';
+    const audioStream = await convertTextToSpeech(
+      aiTextResponse,
+      requestId,
+      voiceId
+    );
 
     // Step 7: Stream Audio Response
     console.log(`[${requestId}] Streaming audio response to client.`);
-    const suggestions = await suggestionsPromise;
-    
     const headers: Record<string, string> = {
       "X-Transcript": encodeURIComponent(transcript),
       "X-Response": encodeURIComponent(aiTextResponse!),
       "Content-Type": "audio/mpeg",
     };
 
-    if (suggestions.length > 0) {
-      headers["X-Recommendations"] = JSON.stringify(suggestions);
-      console.log(`[${requestId}] Added X-Recommendations header:`, suggestions);
-    }
-
-    return new Response(audioStream, {
-      headers,
-    });
+    return new Response(audioStream, { headers });
   } catch (error: any) {
-    console.error(`[${requestId}] CRITICAL ERROR in POST handler:`, error.message, error.stack);
-    return NextResponse.json({ error: error.message || "An unexpected error occurred." }, { status: 500 });
+    console.error(
+      `[${requestId}] CRITICAL ERROR in POST handler:`,
+      error.message,
+      error.stack
+    );
+    return NextResponse.json(
+      { error: error.message || "An unexpected error occurred." },
+      { status: 500 }
+    );
   }
 }
