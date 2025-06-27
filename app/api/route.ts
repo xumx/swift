@@ -48,11 +48,13 @@ async function getTranscript(input: string | File) {
     const [ptTranscription, enTranscription] = await Promise.all([
       groq.audio.transcriptions.create({
         file: input,
+        prompt: "meeting discussion about AI and chatbots call center with KeyReply",
         model: GROQ_MODELS.speech,
         language: "pt",
       }),
       groq.audio.transcriptions.create({
         file: input,
+        prompt: "meeting discussion about AI and chatbots call center with KeyReply",
         model: GROQ_MODELS.speech,
         language: "en",
       }),

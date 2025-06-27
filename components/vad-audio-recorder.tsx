@@ -53,6 +53,10 @@ interface VadAudioRecorderProps {
 export function VadAudioRecorder({ onSubmit, onVadStateChange }: VadAudioRecorderProps) {
   const vad = useMicVAD({
     model: "v5",
+    frameSamples: 512,
+    positiveSpeechThreshold: 0.45,
+    negativeSpeechThreshold: 0.3,
+    preSpeechPadFrames: 3,
     redemptionFrames: 4,
     startOnLoad: true,
     onSpeechEnd: (audio) => {
