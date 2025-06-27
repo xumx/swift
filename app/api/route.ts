@@ -27,7 +27,7 @@ export async function POST(request: Request) {
     return new Response("Invalid request data", { status: 400 });
   }
 
-  const transcript = await getTranscript(data.input);
+  const transcript = await getTranscript(data!.input);
   if (!transcript) {
     return new Response("Invalid audio", { status: 400 });
   }
