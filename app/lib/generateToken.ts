@@ -1,5 +1,18 @@
-import * as crypto from "crypto";
+import * as crypto from 'crypto';
 
+// Privilege enums
+enum Privilege {
+  PrivPublishStream = 0,
+  PrivSubscribeStream = 4,
+}
+
+enum PrivatePrivilege {
+  PrivPublishAudioStream = 1,
+  PrivPublishVideoStream = 2,
+  PrivPublishDataStream = 3,
+}
+
+// BufferWriter class matching original implementation
 class BufferWriter {
   private buffer = Buffer.alloc(1024);
   private position = 0;
@@ -45,20 +58,10 @@ class BufferWriter {
   }
 }
 
-export const VERSION = "001";
-
-export enum Privilege {
-  PrivPublishStream = 0,
-  PrivSubscribeStream = 4,
-}
-
-enum PrivatePrivilege {
-  PrivPublishAudioStream = 1,
-  PrivPublishVideoStream,
-  PrivPublishDataStream,
-}
-
-export class AccessToken {
+// AccessToken class matching original implementation
+class AccessToken {
+  private static readonly VERSION = "001";
+  
   appID: string;
   appKey: string;
   roomID: string;
@@ -67,7 +70,6 @@ export class AccessToken {
   nonce: number;
   expireAt: number;
   privileges: Map<number, number>;
-  signature?: string;
 
   constructor(appID: string, appKey: string, roomID: string, userID: string) {
     this.appID = appID;
@@ -99,13 +101,10 @@ export class AccessToken {
     }
   }
 
-  // ExpireTime sets token expire time, won't expire by default.
-  // The token will be invalid after expireTime no matter what privilege's expireTime is.
   expireTime(expireTimestamp: number): void {
     this.expireAt = expireTimestamp;
   }
 
-  // Serialize generates the token string
   serialize(): string {
     const bytesM = this.packMsg();
     const signature = this.encodeHMac(this.appKey, bytesM);
@@ -114,17 +113,7 @@ export class AccessToken {
       .putBytes(signature)
       .pack();
 
-    return VERSION + this.appID + content.toString("base64");
-  }
-
-  verify(key: string): boolean {
-    if (
-      this.expireAt > 0 &&
-      Math.floor(new Date().getTime() / 1000) > this.expireAt
-    ) {
-      return false;
-    }
-    return this.encodeHMac(key, this.packMsg()).toString() === this.signature;
+    return AccessToken.VERSION + this.appID + content.toString("base64");
   }
 
   private packMsg(): Buffer {
@@ -146,12 +135,47 @@ export class AccessToken {
 }
 
 export function generateRtcToken(appID: string, appKey: string, roomID: string, userID: string, expireTimestamp: number): string {
-  console.log('[generateRtcToken] Called with:', { appID, appKey, roomID, userID, expireTimestamp });
-  const accessToken = new AccessToken(appID, appKey, roomID, userID);
-  accessToken.expireTime(expireTimestamp);
-  accessToken.addPrivilege(Privilege.PrivPublishStream, expireTimestamp);
-  accessToken.addPrivilege(Privilege.PrivSubscribeStream, expireTimestamp);
-  const token = accessToken.serialize();
-  console.log('[generateRtcToken] Generated token:', token.substring(0, 20) + '...' );
-  return token;
+  console.log('[generateRtcToken] Starting token generation with params:', {
+    appID: appID ? `${appID.substring(0, 8)}...` : 'MISSING',
+    appKey: appKey ? `${appKey.substring(0, 8)}...` : 'MISSING',
+    roomID,
+    userID,
+    expireTimestamp,
+    expireTime: new Date(expireTimestamp * 1000).toISOString()
+  });
+
+  try {
+    // Validate input parameters
+    if (!appID || !appKey || !roomID || !userID) {
+      const missingParams = [];
+      if (!appID) missingParams.push('appID');
+      if (!appKey) missingParams.push('appKey');
+      if (!roomID) missingParams.push('roomID');
+      if (!userID) missingParams.push('userID');
+      
+      console.error('[generateRtcToken] Missing required parameters:', missingParams);
+      return '';
+    }
+
+    if (expireTimestamp <= Math.floor(Date.now() / 1000)) {
+      console.error('[generateRtcToken] Invalid expireTimestamp - must be in the future');
+      return '';
+    }
+
+    const token = new AccessToken(appID, appKey, roomID, userID);
+    console.log('[generateRtcToken] AccessToken created successfully');
+    
+    token.addPrivilege(Privilege.PrivSubscribeStream, expireTimestamp);
+    token.addPrivilege(Privilege.PrivPublishStream, expireTimestamp);
+    token.expireTime(expireTimestamp);
+    console.log('[generateRtcToken] Privileges added successfully');
+    
+    const serializedToken = token.serialize();
+    console.log('[generateRtcToken] Token serialized successfully, length:', serializedToken.length);
+    
+    return serializedToken;
+  } catch (error) {
+    console.error('[generateRtcToken] Token generation failed with error:', error);
+    return '';
+  }
 }

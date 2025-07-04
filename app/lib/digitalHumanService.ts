@@ -217,7 +217,7 @@ export function sendDigitalHumanMessage(sessionId: string, message: string, data
 export function sendDigitalHumanBinaryData(sessionId: string, data: Uint8Array): void {
   const instance = globalThis.digitalHumanMap.get(sessionId);
   if (!instance || instance.ws.readyState !== WebSocket.OPEN) {
-    console.warn(`[DigitalHumanService] WebSocket for sessionId ${sessionId} not open. Binary data not sent.`);
+    // console.warn(`[DigitalHumanService] WebSocket for sessionId ${sessionId} not open. Binary data not sent.`);
     return;
   }
   const headerBytes = new TextEncoder().encode(Protocol.DAT_PCM_START);
@@ -225,7 +225,7 @@ export function sendDigitalHumanBinaryData(sessionId: string, data: Uint8Array):
   merged.set(headerBytes, 0);
   merged.set(new Uint8Array(data), headerBytes.length);
   instance.ws.send(merged.buffer);
-  console.debug(`[DigitalHumanService] Sent binary data for sessionId ${sessionId}.`);
+  // console.debug(`[DigitalHumanService] Sent binary data for sessionId ${sessionId}.`);
 }
 
 /**
@@ -250,4 +250,14 @@ export const stopStreamRef = { current: false };
 export function getDigitalHumanConnectionPromise(sessionId: string): Promise<WebSocket> | null {
   const instance = globalThis.digitalHumanMap.get(sessionId);
   return instance ? instance.connectionPromise : null;
+}
+
+/**
+ * Validates if a session is still active and the WebSocket connection is open.
+ * @param sessionId The session ID to validate
+ * @returns true if the session exists and the WebSocket is open, false otherwise
+ */
+export function validateDigitalHumanSession(sessionId: string): boolean {
+  const instance = globalThis.digitalHumanMap.get(sessionId);
+  return instance ? instance.ws.readyState === WebSocket.OPEN : false;
 }

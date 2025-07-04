@@ -3,6 +3,7 @@ import {
   connectDigitalHuman,
   closeDigitalHumanConnection,
   forceDigitalHumanInterrupt,
+  validateDigitalHumanSession,
 } from '@/lib/digitalHumanService';
 import { generateRtcToken } from "@/lib/generateToken";
 import { getPersonaById } from '@/lib/personas';
@@ -13,11 +14,27 @@ import { streamingStateManager } from '@/lib/streamingState';
  * Initiates a WebSocket connection to the Digital Human backend.
  */
 export async function POST(req: NextRequest) {
-  // Ignore any body from the client, use server-side values only
-  // const avatarRtcToken = generateRtcToken(process.env.RTC_APP_ID!, process.env.RTC_APP_KEY!, process.env.RTC_ROOM_ID!, process.env.AVATAR_RTC_USER_ID!, 3600);
+  const { searchParams } = new URL(req.url);
+  const action = searchParams.get('action');
+  const sessionId = searchParams.get('sessionId');
+
+  // Handle cleanup requests from sendBeacon (page unload)
+  if (action === 'disconnect' && sessionId) {
+    console.log(`[API] Cleanup request via sendBeacon for sessionId: ${sessionId}`);
+    closeDigitalHumanConnection(sessionId);
+    return NextResponse.json({ status: 'Digital Human session disconnected via cleanup.' });
+  }
+
+  // Handle normal session creation requests
+  let requestBody;
+  try {
+    requestBody = await req.json();
+  } catch (error) {
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
 
   // Parse personaId from JSON body
-  const { personaId } = await req.json();
+  const { personaId } = requestBody;
   const persona = getPersonaById(personaId as string);
   
   // Use 'let' for avatarRole as it might be reassigned
@@ -25,6 +42,9 @@ export async function POST(req: NextRequest) {
   if (!avatarRole) { // If persona-specific role is not available, use default
     avatarRole = process.env.AVATAR_ROLE!; 
   }
+
+  // Generate Avatar RTC Token
+  const avatarRtcToken = generateRtcToken(process.env.RTC_APP_ID!, process.env.RTC_APP_KEY!, process.env.RTC_ROOM_ID!, process.env.AVATAR_RTC_USER_ID!, Math.floor(Date.now() / 1000) + 3600 ) || process.env.AVATAR_RTC_TOKEN!;
 
   const params = {
     live: { live_id: `keyreply-live-${Date.now()}` }, 
@@ -45,14 +65,14 @@ export async function POST(req: NextRequest) {
       rtc_app_id: process.env.RTC_APP_ID!,
       rtc_room_id: process.env.RTC_ROOM_ID!,
       rtc_uid: process.env.AVATAR_RTC_USER_ID!,
-      rtc_token: process.env.AVATAR_RTC_TOKEN!
+      rtc_token: avatarRtcToken,
     }
   };
 
   try {
     const sessionId = crypto.randomUUID();
     await connectDigitalHuman(sessionId, params);
-    return NextResponse.json({ message: 'Digital Human connection initiated.', sessionId });
+    return NextResponse.json({ message: 'Digital Human session connected.', sessionId });
   } catch (error: any) {
     // Ensure error message is a string for safe JSON serialization
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Failed to connect to Digital Human.' }, { status: 500 });
@@ -68,13 +88,23 @@ export async function GET(req: NextRequest) {
   const action = searchParams.get('action');
   const sessionId = searchParams.get('sessionId');
 
+
   if (!sessionId) {
     return NextResponse.json({ error: '`sessionId` query parameter is required.' }, { status: 400 });
   }
 
   if (action === 'disconnect') {
     closeDigitalHumanConnection(sessionId);
-    return NextResponse.json({ status: `Digital Human WebSocket connection for session ${sessionId} closed successfully.` });
+    return NextResponse.json({ status: `Digital Human session disconnected.` });
+  } else if (action === 'validate') {
+    // Phase 2: Session validation endpoint
+    const isValid = validateDigitalHumanSession(sessionId);
+    
+    return NextResponse.json({ 
+      valid: isValid,
+      sessionId: sessionId,
+      status: isValid ? 'active' : 'inactive'
+    });
   } else {
     return NextResponse.json({ error: 'Invalid action.' }, { status: 400 });
   }
@@ -118,7 +148,7 @@ export async function PATCH(req: NextRequest) {
     
     return NextResponse.json({ 
       success: true, 
-      message: `Interrupt signal sent to digital human for session ${sessionId}` 
+      message: `Interrupt signal sent to digital human` 
     });
   } catch (error: any) {
     console.error(`[API] Error interrupting digital human:`, error);
