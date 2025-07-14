@@ -1,9 +1,10 @@
 import { GoogleGenAI } from "@google/genai";
-import { generateText } from "ai";
-import { groq } from '@ai-sdk/groq';
+import Groq from "groq-sdk";
+import { SUGGESTION_PROMPTS } from "@/lib/prompt/suggestions";
 
-// Lazy initialization of Gemini client
+// Lazy initialization of AI clients
 let geminiClient: GoogleGenAI | null = null;
+let groqClient: Groq | null = null;
 
 function getGeminiClient(): GoogleGenAI {
   if (!geminiClient) {
@@ -12,160 +13,321 @@ function getGeminiClient(): GoogleGenAI {
   return geminiClient;
 }
 
-// Using Groq for for suggestion generation
-// const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+function getGroqClient(): Groq {
+  if (!groqClient) {
+    groqClient = new Groq({ apiKey: process.env.GROQ_API_KEY });
+  }
+  return groqClient;
+}
 
 export interface Message {
   role: "advisor" | "client" | "system";
   content: string;
 }
 
+interface ConversationPrompt {
+  conversationPrompt: string;
+  systemPrompt?: string;
+}
+
+function buildConversationPrompt(
+  messages: Message[], 
+  systemPrompt?: string, 
+  includeSystemInPrompt: boolean = false
+): ConversationPrompt {
+  let conversationPrompt = "Here is the transcript so far:\n";
+  
+  // Build conversation history
+  for (const message of messages) {
+    const role = message.role === "advisor" ? "Advisor" : "Client";
+    conversationPrompt += `${role}: ${message.content}\n`;
+  }
+  
+  // Extract the latest client message for emphasis
+  const latestClientMessage = messages
+    .filter(msg => msg.role === "client")
+    .slice(-1)[0];
+  
+  if (latestClientMessage) {
+    conversationPrompt += `\nThe client said:\n${latestClientMessage.content}\n`;
+  }
+  
+  // // Add clear task instruction
+  conversationPrompt += "\nSuggests what the advisor should say next";
+  
+  // Handle system prompt integration for different providers
+  if (includeSystemInPrompt && systemPrompt) {
+    // For Groq: prepend system prompt to conversation prompt
+    conversationPrompt = `${systemPrompt}\n\n${conversationPrompt}`;
+    return { conversationPrompt };
+  } else {
+    // For Gemini: keep system prompt separate
+    return { conversationPrompt, systemPrompt };
+  }
+}
+
+function isValidJSONArray(rawResponse: string, requestId?: string): boolean {
+  const debug = true; // Enable debug logging
+  
+  if (!rawResponse || typeof rawResponse !== 'string') {
+    if (debug) console.log(`[${requestId}] JSON validation failed: Not a string`);
+    return false;
+  }
+
+  const trimmed = rawResponse.trim();
+  
+  // Must have some content
+  if (trimmed.length === 0) {
+    if (debug) console.log(`[${requestId}] JSON validation failed: Empty content`);
+    return false;
+  }
+
+  // Try to parse as JSON array
+  try {
+    const parsed = JSON.parse(trimmed);
+    
+    // Must be an array
+    if (!Array.isArray(parsed)) {
+      if (debug) console.log(`[${requestId}] JSON validation failed: Not an array`);
+      return false;
+    }
+    
+    // Must have exactly 2 elements
+    if (parsed.length !== 2) {
+      if (debug) console.log(`[${requestId}] JSON validation failed: Array length ${parsed.length} !== 2`);
+      return false;
+    }
+    
+    // Both elements must be strings
+    if (!parsed.every(item => typeof item === 'string')) {
+      if (debug) console.log(`[${requestId}] JSON validation failed: Not all elements are strings`);
+      return false;
+    }
+    
+    // Validate each suggestion with debug logging
+    if (debug) console.log(`[${requestId}] Validating individual suggestions:`);
+    const isValid = parsed.every((suggestion, index) => {
+      if (debug) console.log(`[${requestId}] Validating suggestion ${index + 1}:`);
+      return isValidSuggestion(suggestion, debug);
+    });
+    
+    if (debug && isValid) console.log(`[${requestId}] All suggestions passed validation`);
+    return isValid;
+    
+  } catch (parseError) {
+    // if (debug) console.log(`[${requestId}] JSON validation failed: Parse error - ${parseError.message}`);
+    return false;
+  }
+}
+
+function isValidSuggestion(suggestion: string, debug: boolean = false): boolean {
+  if (!suggestion || typeof suggestion !== 'string') {
+    if (debug) console.log(`Validation failed: Not a string - ${typeof suggestion}`);
+    return false;
+  }
+
+  const trimmed = suggestion.trim();
+  
+  // Reject empty or whitespace-only suggestions
+  if (trimmed.length === 0) {
+    if (debug) console.log(`Validation failed: Empty or whitespace-only suggestion`);
+    return false;
+  }
+
+  // Reject obvious JSON/array structure artifacts
+  if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+    if (debug) console.log(`Validation failed: Starts with JSON bracket/brace - "${trimmed.substring(0, 20)}..."`);
+    return false;
+  }
+  
+  // Only reject quotes if they look like JSON artifacts (containing commas)
+  if (trimmed.includes('",') || trimmed === '""') {
+    if (debug) console.log(`Validation failed: Contains JSON quote artifacts - "${trimmed.substring(0, 20)}..."`);
+    return false;
+  }
+
+  // Reject suggestions that are only punctuation or symbols (no letters)
+  if (!/[a-zA-Z]/.test(trimmed)) {
+    if (debug) console.log(`Validation failed: No letters found - "${trimmed.substring(0, 20)}..."`);
+    return false;
+  }
+
+  // Validate word count (≤30 words to allow more natural responses)
+  const wordCount = trimmed.split(/\s+/).filter(word => word.length > 0).length;
+  if (wordCount > 30) {
+    if (debug) console.log(`Validation failed: Too many words (${wordCount} > 30) - "${trimmed.substring(0, 50)}..."`);
+    return false;
+  }
+
+  // Reject suggestions that are too short (at least 2 words)
+  if (wordCount < 2) {
+    if (debug) console.log(`Validation failed: Too few words (${wordCount} < 2) - "${trimmed}"`);
+    return false;
+  }
+
+  if (debug) console.log(`Validation passed: ${wordCount} words - "${trimmed.substring(0, 50)}..."`);
+  return true;
+}
+
+function processSuggestionResponse(rawText: string | undefined | null, requestId: string): string[] {
+  if (!rawText) {
+    console.warn(`[${requestId}] FINAL VALIDATION: No content in suggestion response`);
+    return [];
+  }
+
+  const cleaned = rawText.trim();
+  
+  // Strict JSON-only processing
+  try {
+    const suggestionsArray = JSON.parse(cleaned);
+    
+    // Final validation should pass since we already validated in provider selection
+    if (Array.isArray(suggestionsArray) && suggestionsArray.length === 2) {
+      console.log(`[${requestId}] FINAL VALIDATION: Successfully parsed ${suggestionsArray.length} valid suggestions:`, suggestionsArray);
+      return suggestionsArray;
+    }
+    
+  } catch (parseError) {
+    console.warn(`[${requestId}] FINAL VALIDATION: JSON parse failed, returning empty array`);
+  }
+  
+  console.warn(`[${requestId}] FINAL VALIDATION: Invalid response format, returning empty array`);
+  return [];
+}
+
+async function callGeminiFlash(messages: Message[], systemPrompt: string, requestId: string): Promise<string> {
+  const t0 = Date.now();
+  
+  // Build conversation prompt using shared function
+  const promptData = buildConversationPrompt(messages, systemPrompt, false);
+  
+  console.log(`[${requestId}] Gemini Flash conversation prompt prepared`);
+
+  // Generate content with system instruction
+  const response = await getGeminiClient().models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: promptData.conversationPrompt,
+    config: {
+      systemInstruction: promptData.systemPrompt
+    }
+  });
+  
+  const latencyMs = Date.now() - t0;
+  console.log(`[${requestId}] Gemini Flash response latency: ${latencyMs} ms`);
+  
+  const result = response.text?.trim() || "";
+  if (!result) {
+    throw new Error("Gemini Flash returned empty response");
+  }
+  
+  console.log(`[${requestId}] Gemini Flash response: "${result}"`);
+  return result;
+}
+
+async function callGeminiFlashLite(messages: Message[], systemPrompt: string, requestId: string): Promise<string> {
+  const t0 = Date.now();
+  
+  // Build conversation prompt using shared function
+  const promptData = buildConversationPrompt(messages, systemPrompt, false);
+  
+  console.log(`[${requestId}] Gemini Flash Lite conversation prompt prepared`);
+  
+  // Generate content with system instruction
+  const response = await getGeminiClient().models.generateContent({
+    model: "gemini-2.5-flash-lite-preview-06-17",
+    contents: promptData.conversationPrompt,
+    config: {
+      systemInstruction: promptData.systemPrompt
+    }
+  });
+  
+  const latencyMs = Date.now() - t0;
+  console.log(`[${requestId}] Gemini Flash Lite response latency: ${latencyMs} ms`);
+  
+  const result = response.text?.trim() || "";
+  if (!result) {
+    throw new Error("Gemini Flash Lite returned empty response");
+  }
+  
+  console.log(`[${requestId}] Gemini Flash Lite response: "${result.substring(0, 100)}..."`);
+  return result;
+}
+
+async function callGroq(messages: Message[], systemPrompt: string, requestId: string): Promise<string> {
+  const t0 = Date.now();
+  
+  // Build unified context prompt using shared function
+  const promptData = buildConversationPrompt(messages, systemPrompt, true);
+  
+  console.log(`[${requestId}] Groq context prompt prepared`);
+  
+  const response = await getGroqClient().chat.completions.create({
+    model: "meta-llama/llama-4-maverick-17b-128e-instruct",
+    messages: [{ role: "user", content: promptData.conversationPrompt }],
+    stream: false,
+  });
+  
+  const latencyMs = Date.now() - t0;
+  console.log(`[${requestId}] Groq response latency: ${latencyMs} ms`);
+  
+  const result = response.choices[0].message.content || "";
+  if (!result) {
+    throw new Error("Groq returned empty response");
+  }
+  
+  console.log(`[${requestId}] Groq response: "${result.substring(0, 100)}..."`);
+  return result;
+}
+
+async function tryAIProviders(messages: Message[], systemPrompt: string, requestId: string): Promise<string> {
+  const providers = [
+    { name: "Gemini 2.5 Flash", fn: () => callGeminiFlash(messages, systemPrompt, requestId) },
+    { name: "Gemini 2.5 Flash Lite", fn: () => callGeminiFlashLite(messages, systemPrompt, requestId) },
+    { name: "Groq", fn: () => callGroq(messages, systemPrompt, requestId) },
+  ];
+
+  const errors: string[] = [];
+
+  for (const provider of providers) {
+    try {
+      console.log(`[${requestId}] Attempting suggestion generation with ${provider.name}`);
+      const rawResponse = await provider.fn();
+      
+      // Strict validation - must be valid JSON array format
+      if (isValidJSONArray(rawResponse, requestId)) {
+        console.log(`[${requestId}] ${provider.name} returned valid JSON array format`);
+        return rawResponse;
+      } else {
+        console.warn(`[${requestId}] ${provider.name} returned invalid JSON array format, trying next provider`);
+        errors.push(`${provider.name}: Invalid JSON array format`);
+        continue; // Try next provider
+      }
+    } catch (error: any) {
+      console.error(`[${requestId}] ${provider.name} failed:`, error.message);
+      errors.push(`${provider.name}: ${error.message}`);
+    }
+  }
+
+  throw new Error(`Suggestion generation failed with all models: ${errors.join(" → ")}`);
+}
+
 export async function generateNextTurnSuggestions(
   messages: Message[],
-  aiLastResponse: string,
-  requestId: string
+  requestId: string,
+  scenarioId: string = 'REFERRAL_ANNUAL_REVIEW'
 ): Promise<string[]> {
   console.log(`[${requestId}] Generating next turn suggestions...`);
+  const startTime = Date.now();
 
-  // Build conversation history string
-  const historyString = messages
-    .filter((msg) => msg.role === "advisor" || msg.role === "client")
-    .map((msg) => `${msg.role === "advisor" ? "Advisor" : "Client"}: ${msg.content}`)
-    .join("\n\n");
-
-  // Create the suggestion prompt
-  const suggestionPrompt = `
-SYSTEM: Referral-Coach v3
-
-Goal  
-Advance the client’s agenda (answer their request) first; if natural, guide toward a warm referral.
-
-Quality gate (all must be true)  
-A. Provide at least one concrete answer to the client’s direct question.  
-B. Do not pressure; tone stays appreciative and low-key.
-
-Bonus points (hit ≥1)  
-1. Reference shared history or recent success the client praised.  
-2. Name who might benefit or why the friend would care.  
-3. Offer an easy step (email draft, joint call, calendar link).
-
-Output format
-Return one line containing a raw JSON array with exactly two strings.  
-• ≤ 18 words each.  
-• If you include a referral bridge it must follow after the concrete answer.  
-• No markdown, commentary, or asterisks.  
-• Avoid empty “let’s schedule” lines with no value or referral context.
-
-Conversation History (Advisor → Client):  
-${historyString}
-
-Client’s Last Response:  
-${aiLastResponse}
-
----  
-Craft two diverse options that pass the quality gate, then output the JSON array on one line, nothing else.
-`;
-
+  const systemPromptContent = SUGGESTION_PROMPTS[scenarioId];
   
-
-  // For benchmarking latency
-  const t0 = Date.now();
-
   try {
-    let rawText = "";
-    let modelUsed = "";
+    const rawResponse = await tryAIProviders(messages, systemPromptContent, requestId);
     
-    // Try Gemini Flash 2.5 first
-    try {
-      console.log(`[${requestId}] Attempting to generate suggestions with Gemini Flash`);
-      const geminiResponse = await getGeminiClient().models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: suggestionPrompt
-      });
-      
-      rawText = geminiResponse.text?.trim() ?? "";
-      modelUsed = "Gemini Flash";
-      console.log(`[${requestId}] Successfully received response from Gemini Flash`);
-      
-      // Try to parse the response - if it fails, we'll fall back to next model
-      JSON.parse(rawText);
-      
-    } catch (geminiError: any) {
-      // Gemini Flash failed or returned invalid JSON, try Gemini Flash Lite Preview
-      console.log(`[${requestId}] Gemini Flash failed or returned invalid JSON: ${geminiError.message}`);
-      console.log(`[${requestId}] Falling back to Gemini Flash Lite Preview...`);
-      
-      try {
-        // Call Gemini Flash Lite Preview as first fallback
-        const geminiLiteResponse = await getGeminiClient().models.generateContent({
-          model: "gemini-2.5-flash-lite-preview-06-17",
-          contents: suggestionPrompt
-        });
-        
-        rawText = geminiLiteResponse.text?.trim() ?? "";
-        modelUsed = "Gemini Flash Lite";
-        console.log(`[${requestId}] Successfully received response from Gemini Flash Lite`);
-        
-        // Try to parse the response - if it fails, we'll fall back to Groq
-        JSON.parse(rawText);
-        
-      } catch (geminiLiteError: any) {
-        // Gemini Flash Lite Preview failed or returned invalid JSON, try Groq
-        console.log(`[${requestId}] Gemini Flash Lite failed or returned invalid JSON: ${geminiLiteError.message}`);
-        console.log(`[${requestId}] Falling back to Groq...`);
-        
-        try {
-          // Call Groq as final fallback
-          const groqResponse = await generateText({
-            model: groq('meta-llama/llama-4-maverick-17b-128e-instruct'),
-            prompt: suggestionPrompt,
-          });
-          
-          rawText = groqResponse.text?.trim() ?? "";
-          modelUsed = "Groq";
-          console.log(`[${requestId}] Successfully received response from Groq`);
-        } catch (groqError: any) {
-          console.error(`[${requestId}] All models failed. Groq error: ${groqError.message}`);
-          throw new Error(`All models failed: Gemini Flash → Gemini Flash Lite → Groq`);
-        }
-      }
-    }
-
-    // Log latency
-    const latencyMs = Date.now() - t0;
-    console.log(`[${requestId}] Suggestion response latency: ${latencyMs} ms`);
-    console.log(`[${requestId}] Raw suggestions from model (${modelUsed}): ${rawText}`);
-
-    // Process the response - try JSON first, then fallback to text extraction
-    try {
-      const suggestionsArray = JSON.parse(rawText);
-      if (Array.isArray(suggestionsArray) &&
-          suggestionsArray.length === 2 &&
-          suggestionsArray.every(s => typeof s === 'string')) {
-        console.log(`[${requestId}] Parsed suggestions:`, suggestionsArray);
-        return suggestionsArray;
-      } else {
-        console.warn(`[${requestId}] JSON parsed but format is incorrect, trying text extraction`);
-        throw new Error("Invalid JSON format");
-      }
-    } catch (parseError) {
-      // If JSON parse fails, try to extract from text
-      console.log(`[${requestId}] JSON parse failed, trying to extract from text`);
-      
-      // Try to extract suggestions from text
-      const lines = rawText.split('\n')
-        .map((line: string) => line.replace(/^\d+\.\s*/, '').trim()) // Remove numbering if present
-        .filter((line: string) => line.length > 0);
-      
-      if (lines.length >= 2) {
-        const suggestions = lines.slice(0, 2);
-        console.log(`[${requestId}] Extracted suggestions from text:`, suggestions);
-        return suggestions;
-      }
-      
-      console.warn(`[${requestId}] Could not extract suggestions from text, returning empty array`);
-      return [];
-    }
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+    console.log(`[${requestId}] Suggestion generation completed in ${elapsed}s`);
+    
+    return processSuggestionResponse(rawResponse, requestId);
   } catch (error: any) {
     console.error(`[${requestId}] Error generating suggestions:`, error);
     return [];

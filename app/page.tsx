@@ -12,7 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Message } from "@/lib/types";
 import { brandColors } from "@/lib/constants";
 import { SummaryDisplay } from '@/components/ui/SummaryDisplay';
-import { PhoneOff, Mic, MicOff, MessageSquare, MessageSquareOff, User, Target, CheckCircle, Info } from 'lucide-react'; // CheckCircle2 moved to ScenarioSelection
+import { PhoneOff, Mic, MicOff, MessageSquare, MessageSquareOff, User, Target, CheckCircle, Info, Eye, EyeOff } from 'lucide-react'; // CheckCircle2 moved to ScenarioSelection
 import { ScenarioSelection } from '@/components/ui/ScenarioSelection';
 import { PersonaSelection } from '@/components/ui/PersonaSelection';
 import { DifficultySelection } from "@/components/ui/DifficultySelection";
@@ -56,6 +56,8 @@ export default function Home() {
   const [minSpeechTimeForInterrupt, setMinSpeechTimeForInterrupt] = useState(200);
 
   const pendingEndCall = useRef(false);
+  const handleEndCallRef = useRef<(() => void) | null>(null);
+  const vadRef = useRef<any>(null);
 
   // State for evaluation
   const [evaluationData, setEvaluationData] = useState<EvaluationResponse | null>(null);
@@ -71,6 +73,7 @@ export default function Home() {
   // Add this state variable at the top of your component
   const [isMessagesPanelVisible, setIsMessagesPanelVisible] = useState(true);
   const [isAnimating, setIsAnimating] = useState(false);
+  const [isSuggestionsPanelVisible, setIsSuggestionsPanelVisible] = useState(true);
 
   // State for new Scenario-based training
   const [scenarioDefinitionsData, setScenarioDefinitionsData] = useState<ScenarioDefinition[]>([]);
@@ -88,6 +91,10 @@ export default function Home() {
 
   const toggleMessagesPanel = () => {
     setIsMessagesPanelVisible(!isMessagesPanelVisible);
+  };
+
+  const toggleSuggestionsPanel = () => {
+    setIsSuggestionsPanelVisible(!isSuggestionsPanelVisible);
   };
 
   useEffect(() => {
@@ -217,7 +224,7 @@ export default function Home() {
         console.log('[handleSubmit] Ending phrase detected, will auto-end when stream finishes'); 
         pendingEndCall.current = true;
         setTimeout(() => {
-          handleEndCall();
+          handleEndCallRef.current?.();
         }, 5000);
       }
 
@@ -227,17 +234,27 @@ export default function Home() {
       // 4️⃣ Fire-and-forget the suggestions fetch
       (async () => {
         try {
-          const hist = [
-            ...(data === "START" ? [] : messages.slice(-10)),  
-            { role: "client", content: text }
-          ];
+          let hist;
+          const currentMessages = messages.slice(-10);
+          
+          if (data === "START") {
+            hist = [{ role: "client", content: text }];
+          } else {
+            hist = [
+              ...currentMessages,
+              { role: "advisor", content: transcript },
+              { role: "client", content: text }
+            ];
+          }
+          
+          const history = hist.map(m => ({ role: m.role, content: m.content }));
           const sugRes = await fetch("/api/suggestion", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              conversationHistory: hist,
-              aiLastResponse: text,
+              conversationHistory: history,
               requestId: crypto.randomUUID().slice(0,8),
+              scenarioId: selectedScenario?.id,
             }),
           });
           if (!sugRes.ok) throw new Error(await sugRes.text());
@@ -335,9 +352,9 @@ export default function Home() {
 
     player.stop(); // Stop any currently playing audio
     console.log("[handleEndCall] Ending call. Current selectionStep:", selectionStep);
-    if (vad && typeof vad.pause === 'function') {
+    if (vadRef.current && typeof vadRef.current.pause === 'function') {
       console.log("[Debug] Ending call. Stopping VAD for evaluation.");
-      vad.pause();
+      vadRef.current.pause();
     }
 
     // Disconnect avatar and leave room
@@ -436,167 +453,173 @@ export default function Home() {
     scenarioDefinitionsData
   ]);
 
+  // Update the ref whenever handleEndCall changes
+  useEffect(() => {
+    handleEndCallRef.current = handleEndCall;
+  }, [handleEndCall]);
 
-  /**
-   * Voice Activity Detection (VAD) Configuration
-   * 
-   * This configures real-time speech detection with smart interrupt handling:
-   * 
-   * 1. **Speech Detection**: Detects when user starts speaking
-   * 2. **Smart Interrupts**: Automatically interrupts avatar after minimum speech time
-   * 3. **Brief Sound Protection**: Cancels interrupts if speech is too short
-   * 4. **Audio Processing**: Converts speech to audio files for API submission
-   * 
-   * Key Features:
-   * - `minSpeechTimeForInterrupt` (200ms): Prevents brief sounds from interrupting
-   * - Configurable threshold for fine-tuning interrupt sensitivity
-   * - Comprehensive logging for debugging interrupt behavior
-   * - Firefox compatibility workarounds
-   */
-  const vad = useMicVAD({
-    // VAD model configuration
-    model: "v5", // Silero VAD v5 model for accurate speech detection
-    startOnLoad: false, // Manually control when VAD starts
+/**
+ * Voice Activity Detection (VAD) Configuration
+ * 
+ * This configures real-time speech detection with smart interrupt handling:
+ * 
+ * 1. **Speech Detection**: Detects when user starts speaking
+ * 2. **Smart Interrupts**: Automatically interrupts avatar after minimum speech time
+ * 3. **Brief Sound Protection**: Cancels interrupts if speech is too short
+ * 4. **Audio Processing**: Converts speech to audio files for API submission
+ * 
+ * Key Features:
+ * - `minSpeechTimeForInterrupt` (200ms): Prevents brief sounds from interrupting
+ * - `redemptionFrames` (31): Waits 1 second of silence before ending speech
+ * - Configurable threshold for fine-tuning interrupt sensitivity
+ * - Comprehensive logging for debugging interrupt behavior
+ * - Firefox compatibility workarounds
+ */
+const vad = useMicVAD({
+  // VAD model configuration
+  model: "v5", // Silero VAD v5 model for accurate speech detection
+  startOnLoad: false, // Manually control when VAD starts
+  
+  // Speech detection thresholds
+  positiveSpeechThreshold: 0.6, // Confidence threshold for speech detection
+  minSpeechFrames: 4, // Minimum consecutive frames for speech confirmation
+  
+  // Pause detection configuration
+  redemptionFrames: 31, // Wait ~1 second (31 frames * 32ms) of silence before ending speech
+  negativeSpeechThreshold: 0.35, // Threshold for detecting silence (default)
+  
+  // Frame configuration for v5 model
+  frameSamples: 512, // Frame size for Silero v5 model
+  
+  // Event handlers
+  onVADMisfire: () => {
+    console.log("[VAD] Misfire - no speech detected within timeout");
+    if (listeningInitiated && !manualListening) setIsListening(false);
+  },
+  
+  onSpeechStart: async () => {
+    // Check if user is muted first
+    if (isMuted) {
+      console.log('[VAD] User is muted, ignoring speech start');
+      return;
+    }
     
-    // Speech detection thresholds
-    positiveSpeechThreshold: 0.6, // Confidence threshold for speech detection
-    minSpeechFrames: 4, // Minimum consecutive frames for speech confirmation
+    console.log('[VAD DEBUG] onSpeechStart triggered', {
+      manualListening,
+      listeningInitiated,
+      sessionId: sessionId ? 'exists' : 'null',
+      isMuted
+    });
     
-    // Event handlers
-    onVADMisfire: () => {
-      console.log("[VAD] Misfire - no speech detected within timeout");
-      if (listeningInitiated && !manualListening) setIsListening(false);
-    },
-    
-    onSpeechStart: async () => {
-      // Check if user is muted first
-      if (isMuted) {
-        console.log('[VAD] User is muted, ignoring speech start');
-        return;
-      }
+    if (!manualListening && listeningInitiated) { // Ensure listening was initiated
+      setIsListening(true);
+      console.log('[VAD DEBUG] Listening state set to true');
       
-      // if (isApiLoading) {
-      //   console.log("[VAD] API is loading, ignoring speech start.");
-      //   return;
-      // }
-      // if (apiLoadingEndTimeRef.current && Date.now() - apiLoadingEndTimeRef.current < 50) {
-      //   console.log("[VAD] Ignoring speech: in cooldown period after API call.");
-      //   return;
-      // }
-      // Add debugging to check if onSpeechStart is firing at all
-      console.log('[VAD DEBUG] onSpeechStart triggered', {
-        manualListening,
-        listeningInitiated,
-        sessionId: sessionId ? 'exists' : 'null',
-        isMuted
-      });
-      
-      if (!manualListening && listeningInitiated) { // Ensure listening was initiated
-        setIsListening(true);
-        console.log('[VAD DEBUG] Listening state set to true');
+      // Smart interrupt mechanism: Always prepare to send interrupt when speech detected
+      // This ensures any current avatar speech/animation is stopped for new user input
+      if (sessionId) {
+        console.log(`[VAD] Speech detected, preparing to interrupt avatar in ${minSpeechTimeForInterrupt}ms`);
         
-        // Smart interrupt mechanism: Always prepare to send interrupt when speech detected
-        // This ensures any current avatar speech/animation is stopped for new user input
-        if (sessionId) {
-          console.log(`[VAD] Speech detected, preparing to interrupt avatar in ${minSpeechTimeForInterrupt}ms`);
-          
-          // Clear any existing timeout to reset the interrupt timer
-          if (interruptTimeoutId) {
-            clearTimeout(interruptTimeoutId);
-            console.log('[VAD] Cleared previous interrupt timeout');
-          }
-          
-          // Set timeout to send interrupt after minimum speech time
-          // This prevents very brief sounds (coughs, clicks, etc.) from interrupting the avatar
-          const timeoutId = setTimeout(async () => {
-            try {
-              console.log('[VAD] Minimum speech time reached, sending interrupt signal to avatar');
-              
-              // Send interrupt using PATCH endpoint
-              await fetch('/api/digital-human', {
-                method: 'PATCH',
-                headers: {
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ sessionId }),
-              });
-              
-              console.log('[VAD] Avatar interrupt signal sent successfully via client service');
-            } catch (error) {
-              console.error('[VAD] Error sending interrupt signal:', error);
-            } finally {
-              setInterruptTimeoutId(null);
-            }
-          }, minSpeechTimeForInterrupt);
-          
-          setInterruptTimeoutId(timeoutId);
-          console.log(`[VAD] Interrupt timer set for ${minSpeechTimeForInterrupt}ms`);
-        } else {
-          console.warn('[VAD] No sessionId available, cannot send interrupt');
+        // Clear any existing timeout to reset the interrupt timer
+        if (interruptTimeoutId) {
+          clearTimeout(interruptTimeoutId);
+          console.log('[VAD] Cleared previous interrupt timeout');
         }
+        
+        // Set timeout to send interrupt after minimum speech time
+        // This prevents very brief sounds (coughs, clicks, etc.) from interrupting the avatar
+        const timeoutId = setTimeout(async () => {
+          try {
+            console.log('[VAD] Minimum speech time reached, sending interrupt signal to avatar');
+            
+            // Send interrupt using PATCH endpoint
+            await fetch('/api/digital-human', {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ sessionId }),
+            });
+            
+            console.log('[VAD] Avatar interrupt signal sent successfully via client service');
+          } catch (error) {
+            console.error('[VAD] Error sending interrupt signal:', error);
+          } finally {
+            setInterruptTimeoutId(null);
+          }
+        }, minSpeechTimeForInterrupt);
+        
+        setInterruptTimeoutId(timeoutId);
+        console.log(`[VAD] Interrupt timer set for ${minSpeechTimeForInterrupt}ms`);
+      } else {
+        console.warn('[VAD] No sessionId available, cannot send interrupt');
       }
-    },
-    onSpeechEnd: async (audio) => {
-      // Check if user is muted first
-      if (isMuted) {
-        console.log('[VAD] User is muted, ignoring speech end');
-        return;
-      }
-      
-      // Anti-brief-sound protection: Cancel interrupt if speech ended quickly
-      // This prevents accidental interruptions from very short sounds
-      if (interruptTimeoutId) {
-        console.log(`[VAD] Speech ended before ${minSpeechTimeForInterrupt}ms threshold, cancelling interrupt`);
-        clearTimeout(interruptTimeoutId);
-        setInterruptTimeoutId(null);
-      }
-      
-      // Process the speech audio for submission to the API
-      player.stop();
-      const wav = utils.encodeWAV(audio);
-      // Create a File object instead of Blob to ensure proper handling
-      const audioFile = new File([wav], 'voice-message.wav', { type: 'audio/wav' });
-      console.log('[VAD] Processing speech audio:', {
-        type: audioFile.type,
-        size: audioFile.size,
-        name: audioFile.name,
-        duration: `${(audio.length / 16000).toFixed(2)}s` // Assuming 16kHz sample rate
-      });
-      
-      // Submit the audio for processing
-      handleSubmit(audioFile);
-      
-      // Update listening state
-      if (!manualListening) {
-        setIsListening(false);
-      }
-      
-      // Firefox-specific VAD pause workaround
-      const isFirefox = navigator.userAgent.includes("Firefox");
-      if (isFirefox && listeningInitiated) {
-        console.log('[VAD] Firefox detected, pausing VAD after speech end');
-        vad.pause(); // Pause only if initiated
-      }
-    },
+    }
+  },
+  
+  onSpeechEnd: async (audio) => {
+    // Check if user is muted first
+    if (isMuted) {
+      console.log('[VAD] User is muted, ignoring speech end');
+      return;
+    }
     
-    // ONNX Runtime configuration for WebAssembly model execution
-    ortConfig(ort) {
-      const isSafari = /^((?!chrome|android).)*safari/i.test(
-        navigator.userAgent
-      );
+    console.log('[VAD] Speech ended after 1 second pause detected');
+    
+    // Anti-brief-sound protection: Cancel interrupt if speech ended quickly
+    // This prevents accidental interruptions from very short sounds
+    if (interruptTimeoutId) {
+      console.log(`[VAD] Speech ended before ${minSpeechTimeForInterrupt}ms threshold, cancelling interrupt`);
+      clearTimeout(interruptTimeoutId);
+      setInterruptTimeoutId(null);
+    }
+    
+    // Process the speech audio for submission to the API
+    player.stop();
+    const wav = utils.encodeWAV(audio);
+    // Create a File object instead of Blob to ensure proper handling
+    const audioFile = new File([wav], 'voice-message.wav', { type: 'audio/wav' });
+    console.log('[VAD] Processing speech audio:', {
+      type: audioFile.type,
+      size: audioFile.size,
+      name: audioFile.name,
+      duration: `${(audio.length / 16000).toFixed(2)}s` // Assuming 16kHz sample rate
+    });
+    
+    // Submit the audio for processing
+    handleSubmit(audioFile);
+    
+    // Update listening state
+    if (!manualListening) {
+      setIsListening(false);
+    }
+    
+    // Firefox-specific VAD pause workaround
+    const isFirefox = navigator.userAgent.includes("Firefox");
+    if (isFirefox && listeningInitiated) {
+      console.log('[VAD] Firefox detected, pausing VAD after speech end');
+      vad.pause(); // Pause only if initiated
+    }
+  },
+  
+  // ONNX Runtime configuration for WebAssembly model execution
+  ortConfig(ort) {
+    const isSafari = /^((?!chrome|android).)*safari/i.test(
+      navigator.userAgent
+    );
 
-      ort.env.wasm = {
-        wasmPaths: {
-          "ort-wasm-simd-threaded.wasm":
-            "/ort-wasm-simd-threaded.wasm",
-          "ort-wasm-simd.wasm": "/ort-wasm-simd.wasm",
-          "ort-wasm.wasm": "/ort-wasm.wasm",
-          "ort-wasm-threaded.wasm": "/ort-wasm-threaded.wasm",
-        },
-        numThreads: isSafari ? 1 : 4,
-      };
-    },
-  });
+    ort.env.wasm = {
+      wasmPaths: {
+        "ort-wasm-simd-threaded.wasm":
+          "/ort-wasm-simd-threaded.wasm",
+        "ort-wasm-simd.wasm": "/ort-wasm-simd.wasm",
+        "ort-wasm.wasm": "/ort-wasm.wasm",
+        "ort-wasm-threaded.wasm": "/ort-wasm-threaded.wasm",
+      },
+      numThreads: isSafari ? 1 : 4,
+    };
+  },
+});
 
   // Effect to monitor VAD status changes - Defined AFTER vad initialization
   useEffect(() => {
@@ -610,6 +633,11 @@ export default function Home() {
       }
     }
   }, [vad, vad?.loading, vad?.errored, vad?.listening]); // Added vad itself and optional chaining for safety
+
+  // Update the ref whenever vad changes
+  useEffect(() => {
+    vadRef.current = vad;
+  }, [vad]);
 
   // Effect to verify ONNX files are accessible at runtime
   useEffect(() => {
@@ -717,6 +745,66 @@ export default function Home() {
   /**
    * Connects to a Digital Human avatar using the server-side service.
    */
+  /**
+   * Validates WebSocket connection stability after initial handshake
+   * Checks connection status multiple times over 2-3 seconds to ensure stability
+   */
+  const validateConnectionStability = useCallback(async (sessionId: string): Promise<boolean> => {
+    const maxAttempts = 6; // 3 seconds of monitoring (6 attempts * 500ms)
+    const pollInterval = 500; // Check every 500ms
+    let consecutiveSuccesses = 0;
+    const requiredSuccesses = 3; // Need 3 consecutive successes for stability
+    
+    console.log('[ConnectionValidation] Starting stability validation for session:', sessionId);
+    
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        const response = await fetch(`/api/digital-human?action=validate&sessionId=${sessionId}`);
+        const result = await response.json();
+        
+        console.log(`[ConnectionValidation] Attempt ${attempt + 1}/${maxAttempts}:`, result);
+        
+        if (result.valid && result.status === 'active') {
+          consecutiveSuccesses++;
+          console.log(`[ConnectionValidation] Success ${consecutiveSuccesses}/${requiredSuccesses}`);
+          
+          // If we have enough consecutive successes, connection is stable
+          if (consecutiveSuccesses >= requiredSuccesses) {
+            console.log('[ConnectionValidation] Connection validated as stable');
+            return true;
+          }
+        } else {
+          consecutiveSuccesses = 0; // Reset on failure
+          console.log(`[ConnectionValidation] Connection not stable: ${result.status}`);
+          
+          // If we're past the initial attempts and still failing, give up
+          if (attempt >= 2) {
+            throw new Error(`Connection unstable: ${result.status || 'Unknown error'}`);
+          }
+        }
+        
+        // Wait before next check (except on last attempt)
+        if (attempt < maxAttempts - 1) {
+          await new Promise(resolve => setTimeout(resolve, pollInterval));
+        }
+      } catch (error: any) {
+        consecutiveSuccesses = 0;
+        console.error(`[ConnectionValidation] Error on attempt ${attempt + 1}:`, error);
+        
+        // If this is the last attempt or we've had multiple failures, give up
+        if (attempt === maxAttempts - 1 || attempt >= 2) {
+          throw new Error(error.message || 'Connection validation failed');
+        }
+        
+        // Wait before retrying
+        await new Promise(resolve => setTimeout(resolve, pollInterval));
+      }
+    }
+    
+    console.log('[ConnectionValidation] Validation incomplete - not enough consecutive successes');
+    return false;
+  }, []);
+
   const handleConnectAvatar = async (selectedPersonaId: string): Promise<string> => {
     if (isAvatarConnected && sessionId) {
       console.log('[Page] Avatar already connected.');
@@ -781,8 +869,10 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    endCallRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [suggestions]);
+    if (isSuggestionsPanelVisible) {
+      endCallRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
+  }, [suggestions, isSuggestionsPanelVisible]);
 
   useEffect(() => {
     if (messagesContainerRef.current) {
@@ -860,11 +950,40 @@ export default function Home() {
                     try {
                       await handleDifficultyProfileGeneration(selectedDifficulty, selectedScenarioId);
                       const id = await handleConnectAvatar(selectedPersonaId);
+                      
+                      // Validate connection stability after initial handshake
+                      console.log('[onNextToSummary] Validating connection stability...');
+                      toast.info('Validating connection stability...');
+                      
+                      const isStable = await validateConnectionStability(id);
+                      if (!isStable) {
+                        throw new Error('Connection validation failed - avatar may be busy or disconnected');
+                      }
+                      
                       setTempID(id);
-                      console.log('[onNextToSummary] Session preparation complete.');
+                      console.log('[onNextToSummary] Session preparation complete with validated connection.');
+                      toast.success('Connection validated successfully!');
                     } catch (error) {
                       console.error('[onNextToSummary] Session preparation failed:', error);
-                      toast.error('Failed to prepare the session. Please check your connection and try again.');
+                      
+                      // Clear connection state on validation failure
+                      setIsAvatarConnected(false);
+                      setSessionId(null);
+                      try {
+                        sessionStorage.removeItem('swift_ai_session_id');
+                        sessionStorage.removeItem('swift_ai_avatar_connected');
+                      } catch (storageError) {
+                        console.warn('[SessionStorage] Failed to clear session on validation failure:', storageError);
+                      }
+                      
+                      // Provide specific error message for connection issues
+                      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+                      if (errorMessage.includes('Connection validation failed') || errorMessage.includes('unstable')) {
+                        toast.error('Avatar connection failed. The avatar may be busy with another user. Please try again in a moment.');
+                      } else {
+                        toast.error('Failed to prepare the session. Please check your connection and try again.');
+                      }
+                      
                       setSelectionStep('selectDifficulty');
                     } finally {
                       setIsPreparingSession(false);
@@ -1103,21 +1222,45 @@ export default function Home() {
         </div>
 
         {/* Bottom Controls Section */}
-        <div className="flex flex-col items-center justify-center w-full max-w-3xl mx-auto mt-8">
-          {/* Mute Status Indicator */}
-          {isMuted && (
-            <div className="text-red-400 text-sm font-medium">
-              You are muted
+        <div className="w-full max-w-3xl mx-auto mt-4 relative">
+          {/* Top row with mute indicator and toggle button */}
+          <div className="flex items-center justify-between w-full mb-2">
+            {/* Left side - Empty space */}
+            <div className="flex-1"></div>
+            
+            {/* Center - Mute Status Indicator */}
+            <div className="flex-1 flex justify-center">
+              {isMuted && (
+                <div className="text-red-400 text-sm font-medium">
+                  You are muted
+                </div>
+              )}
             </div>
-          )}
+            
+            {/* Right side - Suggestions Panel Toggle Button */}
+            <div className="flex-1 flex justify-end">
+              <Button
+                onClick={toggleSuggestionsPanel}
+                className="p-2 rounded-full shadow-lg transition-all duration-300 hover:shadow-xl border-2 bg-[#00A9E7] hover:bg-[#0098D1] border-[#00A9E7] text-white hover:border-[#0098D1]"
+                aria-label={isSuggestionsPanelVisible ? "Hide suggestions" : "Show suggestions"}
+                title={isSuggestionsPanelVisible ? "Hide suggestions" : "Show suggestions"}
+              >
+                {isSuggestionsPanelVisible ? (
+                  <EyeOff size={20} />
+                ) : (
+                  <Eye size={20} />
+                )}
+              </Button>
+            </div>
+          </div>
                     
           {isApiLoading ? (
             <div className="mt-4 mb-2 w-full max-w-3xl mx-auto flex justify-center px-4">
               <LoadingIcon />
             </div>
           ) : suggestions && suggestions.length > 0 ? (
-            <div className="mt-4 mb-2 w-full max-w-3xl mx-auto flex flex-wrap justify-center gap-2 px-4">
-              {suggestions.map((suggestion, index) => (
+            <div className="mt-4 mb-2 w-full max-w-3xl mx-auto flex flex-wrap justify-center gap-2 px-4 relative">
+              {isSuggestionsPanelVisible && suggestions.map((suggestion, index) => (
                 <Button
                   key={index}
                   variant="outline"
@@ -1135,7 +1278,7 @@ export default function Home() {
           ) : null}
           
           {/* End Call Button - Moved below the form */}
-          <div className="w-full max-w-3xl mx-4 mt-4">
+          <div className="w-full max-w-3xl mx-auto mt-4">
             <Button
               ref={endCallRef}
               type="button"
@@ -1148,7 +1291,7 @@ export default function Home() {
             </Button>
           </div>
 
-          <div className="pt-6 text-center max-w-xl text-balance min-h-16 mx-4" style={{ color: '#FFFFFF', fontSize: '0.95rem' }}>
+          <div className="pt-6 text-center max-w-xl text-balance min-h-16 mx-auto px-4" style={{ color: '#FFFFFF', fontSize: '0.95rem' }}>
             {messages.length === 0 && listeningInitiated && (
               <AnimatePresence>
                 {vad.loading ? (

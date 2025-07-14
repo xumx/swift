@@ -6,6 +6,7 @@ import { CheckCircle2 } from 'lucide-react';
 import { ScenarioDefinition } from '@/lib/scenarios';
 import { Persona } from '@/lib/personas';
 import { Difficulty } from '@/lib/difficultyTypes';
+import { getDifficultyDescriptions } from '@/lib/scenarioConfig';
 
 interface DifficultySelectionProps {
   selectedScenario: ScenarioDefinition | undefined;
@@ -17,23 +18,8 @@ interface DifficultySelectionProps {
   onNextToSummary: () => void;
 }
 
-const difficulties: { id: Difficulty; title: string; description: string }[] = [
-  {
-    id: 'easy',
-    title: 'Easy ⭐',
-    description: `The client enjoys a long-standing, high-trust relationship, communicates openly, experiences low financial stress, makes decisive solo decisions, tolerates minor missteps, and follows through promptly.`
-  },
-  {
-    id: 'medium',
-    title: 'Medium ⭐⭐',
-    description: `The client has a multi-year, respectful relationship, values detail-oriented communication, manages variable income, consults their spouse on decisions, requires concrete examples, and allows limited validation.`
-  },
-  {
-    id: 'hard',
-    title: 'Hard ⭐⭐⭐',
-    description: `The client’s relationship is new with low trust from past disappointments, communicates privately and skeptically, faces high financial stress, relies on consensus-driven slow decisions, demands detailed data, and insists on formal validation.`
-  }
-];
+// Legacy export for backward compatibility - now dynamically generated
+export const difficulties: { id: Difficulty; title: string; description: string }[] = [];
 
 export const DifficultySelection: React.FC<DifficultySelectionProps> = ({
   selectedScenario,
@@ -49,6 +35,9 @@ export const DifficultySelection: React.FC<DifficultySelectionProps> = ({
       Error: Scenario or persona is missing. Please go back.
     </p>;
   }
+
+  // Get scenario-specific difficulty descriptions
+  const scenarioDifficulties = getDifficultyDescriptions(selectedScenario.id);
 
   return (
     <>
@@ -69,7 +58,7 @@ export const DifficultySelection: React.FC<DifficultySelectionProps> = ({
           How challenging should the customer be to convince?
         </p>
         <div className="space-y-3">
-          {difficulties.map((diff) => (
+          {scenarioDifficulties.map((diff) => (
             <Card
               key={diff.id}
               className={clsx(

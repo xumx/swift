@@ -6,8 +6,8 @@ import type { Message } from "@/lib/suggestionService";
 
 export interface SuggestionRequest {
   conversationHistory: Message[];
-  aiLastResponse: string;
   requestId: string;
+  scenarioId?: string;
 }
 
 export interface SuggestionResponse {
@@ -16,12 +16,11 @@ export interface SuggestionResponse {
 
 export async function POST(request: Request) {
   try {
-    const { conversationHistory, aiLastResponse, requestId } =
+    const { conversationHistory, requestId, scenarioId } =
       (await request.json()) as SuggestionRequest;
 
     if (
       !Array.isArray(conversationHistory) ||
-      typeof aiLastResponse !== "string" ||
       typeof requestId !== "string"
     ) {
       return NextResponse.json(
@@ -32,8 +31,8 @@ export async function POST(request: Request) {
 
     const suggestions = await generateNextTurnSuggestions(
       conversationHistory,
-      aiLastResponse,
-      requestId
+      requestId,
+      scenarioId
     );
 
     return NextResponse.json<SuggestionResponse>({ suggestions });

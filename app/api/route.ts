@@ -1,30 +1,9 @@
 import { NextResponse } from "next/server";
-import Groq from "groq-sdk";
 import { getTranscript } from '@/lib/whisper';
 import { getScenarioDefinitionById,  } from '@/lib/scenarios'; // Added for START_SESSION
 import { Persona, getPersonaById } from '@/lib/personas';
-import { GoogleGenAI } from "@google/genai";
-import { PERSONA_PROMPTS } from "@/lib/prompt/persona";
 import { generateSpeech } from '@/lib/elevenlabs';
-// import { generateSpeechMinimax } from "@/lib/minimax";
-
-// Lazy initialization of AI clients
-let geminiClient: GoogleGenAI | null = null;
-let groqClient: Groq | null = null;
-
-function getGeminiClient(): GoogleGenAI {
-  if (!geminiClient) {
-    geminiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-  }
-  return geminiClient;
-}
-
-function getGroqClient(): Groq {
-  if (!groqClient) {
-    groqClient = new Groq({ apiKey: process.env.GROQ_API_KEY });
-  }
-  return groqClient;
-}
+import { generateMainAiTextResponse } from '@/lib/aiResponseService';
 
 interface Message {
   role: "advisor" | "client" | "system";
@@ -139,144 +118,6 @@ async function parseIncomingRequest(
   };
 }
 
-async function generateMainAiTextResponse(
-  messages: Message[],
-  roleplayProfile: Persona | null,
-  requestId: string,
-  difficultyProfile: string,
-  scenarioId: string,
-): Promise<string> {
-  console.log(`[${requestId}] Generating main AI text response with Gemini, scenario: ${scenarioId}. Messages count: ${messages.length}`);
-
-  let roleplayProfilePrompt = 
-  PERSONA_PROMPTS[roleplayProfile?.id ?? ""] || PERSONA_PROMPTS.LIANG_CHEN;
-  console.log(`[${requestId}] Roleplay profile prompt: ${roleplayProfilePrompt}`.substring(0, 100));
-
-  // Now append the profile with the difficulty profile
-  let systemPromptContent = `
-  ${roleplayProfilePrompt.trim()}
-
-  ## Difficulty Profile:
-  ${difficultyProfile.trim()}      
-
-  ## Formatting Rules
-  - Do not use asterisks (*) in your replies.
-
-  ## Response-Length & Brevity Rules
-  1. MIRROR TURN-LENGTH  
-    • If the user’s last turn is very short (<10 words), keep your reply under 2 sentences.  
-    • If the user speaks 10–30 words, reply in 3–4 sentences.  
-    • Go beyond 4 sentences only for new or critical information.
-
-  2. BALANCED TURN-TAKING  
-    • Match response density to the user: brief for brief, detailed for “why” or “how.”
-
-  3. HUMAN TONE  
-    • Write conversationally—use contractions and everyday language.
-
-  ## End-Session Phrases  
-  When you decide the conversation is wrapping up (e.g. client has no more questions), choose exactly one of these to close the call naturally:
-    • “Alright, see you next time”  
-    • “Great chatting—see you next time.”  
-    • “That covers everything—talk soon.”  
-    • “Thanks. Have a good day!”
-  `;
-
-  // Using Gemini for responses
-  // 1. Separate out the last message
-  const lastMsgObj = messages[messages.length - 1];
-  const priorMsgs = messages.slice(0, -1);
-
-  // 2. Create the chat with the earlier history, mapping roles
-  const t0 = Date.now();
-  let chat; // Declare chat outside the try block for broader scope
-
-  try {
-    console.log(`[${requestId}] Creating Gemini chat session...`);
-    chat = getGeminiClient().chats.create({
-      // model: "gemini-2.5-flash-lite-preview-06-17",
-      model: "gemini-2.5-flash",
-      history: priorMsgs.map(m => ({
-        role: m.role === "advisor" ? "user" : "model",
-        parts: [{ text: m.content }]
-      })),
-      config: {
-        systemInstruction: systemPromptContent
-      }
-    });
-    console.log(`[${requestId}] Gemini chat session created.`);
-
-    // 3. Send the very last message as the user’s new turn, mapping its role
-    console.log(`[${requestId}] Sending last message to Gemini chat...`);
-    const resp = await chat.sendMessage({
-      message: lastMsgObj.content
-    });
-
-    const latencyMs = Date.now() - t0;
-    console.log(`[${requestId}] Gemini chat response latency: ${latencyMs} ms`);
-
-    const aiResponse = resp.text?.trim() || "";
-    if (!aiResponse) {
-      console.error(`[${requestId}] Gemini returned an empty response for chat.sendMessage.`);
-      throw new Error("Gemini chat returned empty response");
-    }
-
-    console.log(`[${requestId}] Gemini chat main response: "${aiResponse.substring(0, 100)}..."`);
-    return aiResponse;
-
-  } catch (err: any) {
-    console.error(`[${requestId}] Error during Gemini chat interaction:`, err);
-    console.log(`[${requestId}] Falling back to Groq for AI response generation...`);
-    
-    // Fallback to Groq if Gemini fails
-    try {
-      console.log(`[${requestId}] Preparing Groq chat messages...`);
-      const groqT0 = Date.now();
-      
-      // 1️⃣ Define a mini‐type alias for Groq's roles
-      type GroqRole = "system" | "user" | "assistant";
-
-      // 2️⃣ Annotate your chat array
-      const chat: { role: GroqRole; content: string }[] = [
-        { role: "system", content: systemPromptContent }
-      ];
-
-      // 3️⃣ Push your prior messages, *casting* to the literal types
-      chat.push(
-        ...messages.map(m => ({
-          role: (m.role === "advisor" ? "user" : "assistant") as GroqRole,
-          content: m.content
-        }))
-      );
-      
-      console.log(`[${requestId}] Groq chat messages prepared.`);
-
-      // Send the chat completion request
-      console.log(`[${requestId}] Sending request to Groq...`);
-      const completion = await getGroqClient().chat.completions.create({
-        messages: chat,
-        model: "meta-llama/llama-4-maverick-17b-128e-instruct",
-      });
-
-      const groqLatencyMs = Date.now() - groqT0;
-      console.log(`[${requestId}] Groq response latency: ${groqLatencyMs} ms`);
-
-      const aiResponse = completion.choices[0]?.message?.content?.trim() || "";
-      if (!aiResponse) {
-        console.error(`[${requestId}] Groq returned an empty response.`);
-        throw new Error("Groq returned empty response");
-      }
-
-      console.log(`[${requestId}] Groq fallback main response: "${aiResponse.substring(0, 100)}..."`);
-      return aiResponse;
-
-    } catch (groqErr: any) {
-      console.error(`[${requestId}] Error during Groq fallback:`, groqErr);
-      throw new Error(`Failed to get main AI response from both Gemini and Groq. Gemini: ${err.message || 'Unknown error'}. Groq: ${groqErr.message || 'Unknown error'}`);
-    }
-  }
-}
-
 export async function POST(req: Request) {
   const requestId = crypto.randomUUID().substring(0, 8);
   console.log(`\n--- [${requestId}] Received POST /api/route ---`);
@@ -349,13 +190,6 @@ export async function POST(req: Request) {
       aiTextResponse,
       voiceId
     );
-
-    // // Using MiniMax
-    // generateSpeechMinimax(
-    //   sessionId!,
-    //   aiTextResponse,
-    //   'English_radiant_girl'
-    // );
 
     // Step 4: Respond to client (audio already streaming to Digital Human)
     console.log(`[${requestId}] Responding to client (audio handled separately).`);
