@@ -1,5 +1,7 @@
 export type Message = {
-  role: "advisor" | "client" | "system";
+  role: string;
   content: string;
   latency?: number;
 };
+
+export type TrainingDomain = 'financial-advisor' | 'healthcare' | 'customer-service';

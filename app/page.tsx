@@ -2,14 +2,15 @@
 
 import clsx from "clsx";
 import { useEffect, useRef, useState, useCallback } from "react";
-import { EnterIcon, LoadingIcon } from "@/lib/icons";
+import { LoadingIcon } from "@/lib/icons";
 import { usePlayer } from "@/lib/usePlayer";
 import { useMicVAD, utils } from "@ricky0123/vad-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ChartLineLinear } from "@/components/ui/chart-line-linear";
 import { Message } from "@/lib/types";
+import { ConversationScore } from "@/lib/scoringService";
 import { brandColors } from "@/lib/constants";
 import { SummaryDisplay } from '@/components/ui/SummaryDisplay';
 import { PhoneOff, Mic, MicOff, MessageSquare, MessageSquareOff, User, Target, CheckCircle, Info, Eye, EyeOff } from 'lucide-react'; // CheckCircle2 moved to ScenarioSelection
@@ -17,11 +18,14 @@ import { ScenarioSelection } from '@/components/ui/ScenarioSelection';
 import { PersonaSelection } from '@/components/ui/PersonaSelection';
 import { DifficultySelection } from "@/components/ui/DifficultySelection";
 import { EvaluationDisplay } from '@/components/ui/EvaluationDisplay'; // Added
+import { SessionHistory } from '@/components/ui/SessionHistory';
+import { StoredSession, getSessionById, saveSession } from '@/lib/sessionStorage';
 import { toast } from 'sonner';
 
 import { Persona, personas, getPersonaById } from '@/lib/personas';
 import { ScenarioDefinition, scenarioDefinitions, getScenarioDefinitionById } from '@/lib/scenarios';
-import { PROMPTS } from '@/lib/prompt';
+import { TrainingDomain } from '@/lib/types';
+import { EVALUATION_PROMPTS } from '@/lib/prompt';
 import { EvaluationResponse } from "@/lib/evaluationTypes";
 import { Difficulty } from '@/lib/difficultyTypes';
 import { initializeAndJoinRoom, leaveAndDestroyRoom } from '@/lib/rtcService';
@@ -72,12 +76,12 @@ export default function Home() {
 
   // Add this state variable at the top of your component
   const [isMessagesPanelVisible, setIsMessagesPanelVisible] = useState(true);
-  const [isAnimating, setIsAnimating] = useState(false);
   const [isSuggestionsPanelVisible, setIsSuggestionsPanelVisible] = useState(true);
 
   // State for new Scenario-based training
   const [scenarioDefinitionsData, setScenarioDefinitionsData] = useState<ScenarioDefinition[]>([]);
   const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null);
+  const [selectedDomain, setSelectedDomain] = useState<TrainingDomain>('financial-advisor');
   const [personasData, setPersonasData] = useState<Persona[]>([]);
   const [selectedPersonaId, setSelectedPersonaId] = useState<string | null>(null);
   const [selectedDifficulty, setSelectedDifficulty] = useState<Difficulty | null>(null); 
@@ -85,9 +89,35 @@ export default function Home() {
   const [isPreparingSession, setIsPreparingSession] = useState<boolean>(false);
   const [tempID, setTempID] = useState<string | null>(null);
 
+  // Call duration tracking state
+  const [callStartTime, setCallStartTime] = useState<number | null>(null);
+  const [callDuration, setCallDuration] = useState<number>(0);
+  const [callDurationInterval, setCallDurationInterval] = useState<NodeJS.Timeout | null>(null);
+
   // Wizard Step State for new flow
-  const [selectionStep, setSelectionStep] = useState<'selectScenario' | 'selectPersona' | 'selectDifficulty' | 'summary' | 'evaluationResults' | null>('selectScenario'); // Added 'evaluationResults' and null
+  const [selectionStep, setSelectionStep] = useState<'selectScenario' | 'selectPersona' | 'selectDifficulty' | 'summary' | 'evaluationResults' | 'sessionHistory' | 'viewHistoricalSession' | null>('selectScenario'); // Added session history steps
   const [suggestions, setSuggestions] = useState<string[]>([]);
+
+  // Session History state
+  const [selectedHistoricalSession, setSelectedHistoricalSession] = useState<StoredSession | null>(null);
+
+  // Development mode state
+  const [isDevelopmentMode, setIsDevelopmentMode] = useState<boolean>(false);
+
+  // Conversation Effectiveness Scoring state
+  const [conversationScores, setConversationScores] = useState<Array<{
+    turn: number;
+    score: number; // Conversation Effectiveness Score (0-100)
+    timestamp: number;
+  }>>([]);
+
+  // Scoring queue for real-time updates
+  const scoringQueueRef = useRef<Array<{
+    turnNumber: number;
+    conversationHistory: Message[];
+    timestamp: number;
+  }>>([]);
+  const isProcessingQueueRef = useRef<boolean>(false);
 
   const toggleMessagesPanel = () => {
     setIsMessagesPanelVisible(!isMessagesPanelVisible);
@@ -97,10 +127,129 @@ export default function Home() {
     setIsSuggestionsPanelVisible(!isSuggestionsPanelVisible);
   };
 
+  // Process scoring queue continuously
+  const processScoreQueue = useCallback(async () => {
+    if (isProcessingQueueRef.current || scoringQueueRef.current.length === 0) {
+      return;
+    }
+    
+    isProcessingQueueRef.current = true;
+    console.log(`[ScoringQueue] Processing ${scoringQueueRef.current.length} queued score requests`);
+    
+    // Process all queued requests
+    while (scoringQueueRef.current.length > 0) {
+      const queueItem = scoringQueueRef.current.shift();
+      if (!queueItem) continue;
+      
+      try {
+        console.log(`[ScoringQueue] Processing turn ${queueItem.turnNumber} with ${queueItem.conversationHistory.length} messages`);
+        console.log(`[ScoringQueue] Message roles: ${queueItem.conversationHistory.map(m => m.role).join(', ')}`);
+        
+        // Fire-and-forget API call
+        const response = await fetch('/api/score-turn', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            conversationHistory: queueItem.conversationHistory,
+            turnNumber: queueItem.turnNumber,
+          }),
+        });
+        
+        if (response.ok) {
+          const scoreData: ConversationScore = await response.json();
+          console.log(`[ScoringQueue] Turn ${scoreData.turn} scored: ${scoreData.score}/100`);
+          
+          // Update conversation scores state for chart
+          setConversationScores(prevScores => {
+            const newScores = [...prevScores];
+            const existingIndex = newScores.findIndex(s => s.turn === scoreData.turn);
+            
+            if (existingIndex >= 0) {
+              // Update existing score
+              newScores[existingIndex] = scoreData;
+            } else {
+              // Add new score and sort by turn number
+              newScores.push(scoreData);
+              newScores.sort((a, b) => a.turn - b.turn);
+            }
+            
+            return newScores;
+          });
+        } else {
+          console.warn(`[ScoringQueue] Failed to score turn ${queueItem.turnNumber}:`, response.statusText);
+          // Graceful degradation - chart will show no change for this turn
+        }
+      } catch (error) {
+        console.error(`[ScoringQueue] Error scoring turn ${queueItem.turnNumber}:`, error);
+        // Graceful degradation - chart continues without this score
+      }
+      
+      // Small delay between requests to avoid overwhelming the API
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    
+    isProcessingQueueRef.current = false;
+    console.log('[ScoringQueue] Queue processing complete');
+  }, []);
+
   useEffect(() => {
     // Load scenario definitions and personas from the imported data
     setScenarioDefinitionsData(scenarioDefinitions);
     setPersonasData(personas);
+  }, []);
+
+  // Development mode setup
+  const setupDevelopmentMode = () => {
+    // Mock data for development
+    const mockScenarioId = 'REFERRAL_SEEKING'; // Default to first available scenario
+    const mockPersonaId = 'SARAH_LEE'; // Default to first available persona
+    const mockDifficulty: Difficulty = 'medium';
+    const mockSessionId = 'dev-session-' + Date.now();
+
+    // Set up mock state
+    setSelectedScenarioId(mockScenarioId);
+    setSelectedPersonaId(mockPersonaId);
+    setSelectedDifficulty(mockDifficulty);
+    setSelectedDomain('financial-advisor');
+    setSessionId(mockSessionId);
+    setIsAvatarConnected(true);
+    setListeningInitiated(true);
+    setSelectionStep(null);
+
+    // Mock conversation for UI testing
+    const mockMessages: Message[] = [
+      { role: 'client', content: 'Hi there! I was hoping you could help me understand some investment options.' },
+      { role: 'advisor', content: 'Of course! I\'d be happy to help you explore your investment options. What are your main financial goals?' },
+      { role: 'client', content: 'I\'m looking to save for retirement, but I\'m not sure where to start.' },
+      { role: 'advisor', content: 'That\'s a great goal to have. Let\'s start by discussing your current financial situation and risk tolerance.' },
+      { role: 'client', content: 'Hi there! I was hoping you could help me understand some investment options.' },
+      { role: 'advisor', content: 'Of course! I\'d be happy to help you explore your investment options. What are your main financial goals?' },
+      { role: 'client', content: 'I\'m looking to save for retirement, but I\'m not sure where to start.' },
+      { role: 'advisor', content: 'That\'s a great goal to have. Let\'s start by discussing your current financial situation and risk tolerance.' }
+    ];
+    setMessages(mockMessages);
+
+    // Mock suggestions
+    const mockSuggestions = [
+      'What\'s your current age and target retirement age?',
+      'What\'s your current age and target retirement age? What\'s your current age and target retirement age? What\'s your current age and target retirement age?',
+    ];
+    setSuggestions(mockSuggestions);
+
+    console.log('[DEV MODE] Development mode activated with mock data and suggestions');
+  };
+
+  // Check for development mode on mount
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const devMode = urlParams.get('dev');
+    
+    if (devMode === 'true') {
+      setIsDevelopmentMode(true);
+      setupDevelopmentMode();
+    }
   }, []);
 
   // Phase 2: Session recovery on page load
@@ -208,13 +357,16 @@ export default function Home() {
       const text       = decodeURIComponent(response.headers.get("X-Response")   || "");
 
       // 3️⃣ Immediately render the new turn
+      const userRoleKey = selectedScenario?.userRole || 'advisor';
+      const personaRoleKey = selectedScenario?.personaRole || 'client';
+      
       if (data === "START") {
-        setMessages([{ role: "client", content: text }]);
+        setMessages([{ role: personaRoleKey, content: text }]);
       } else {
         setMessages(msgs => [
           ...msgs,
-          { role: "advisor", content: transcript },
-          { role: "client",  content: text, latency },
+          { role: userRoleKey, content: transcript },
+          { role: personaRoleKey,  content: text, latency },
         ]);
       }
 
@@ -223,9 +375,15 @@ export default function Home() {
       if (isEnding) {
         console.log('[handleSubmit] Ending phrase detected, will auto-end when stream finishes'); 
         pendingEndCall.current = true;
+        
+        // Calculate dynamic timeout based on message length for proper speech timing
+        const wordCount = text.trim().split(/\s+/).length;
+        const estimatedSpeechTime = Math.max(3000, (wordCount / 2.5) * 1000 + 2000); // ~2.5 words/sec + 2sec buffer, min 3sec
+        console.log(`[handleSubmit] Message length: ${wordCount} words, estimated speech time: ${estimatedSpeechTime}ms`);
+        
         setTimeout(() => {
           handleEndCallRef.current?.();
-        }, 5000);
+        }, estimatedSpeechTime);
       }
 
       // Clear input field
@@ -237,13 +395,16 @@ export default function Home() {
           let hist;
           const currentMessages = messages.slice(-10);
           
+          const userRoleKey = selectedScenario?.userRole || 'advisor';
+          const personaRoleKey = selectedScenario?.personaRole || 'client';
+          
           if (data === "START") {
-            hist = [{ role: "client", content: text }];
+            hist = [{ role: personaRoleKey, content: text }];
           } else {
             hist = [
               ...currentMessages,
-              { role: "advisor", content: transcript },
-              { role: "client", content: text }
+              { role: userRoleKey, content: transcript },
+              { role: personaRoleKey, content: text }
             ];
           }
           
@@ -266,6 +427,31 @@ export default function Home() {
         }
       })();
 
+      // 5️⃣ Enqueue scoring request for real-time chart updates
+      if (data !== "START") {
+        const newTurnNumber = Math.floor((messages.length + 2) / 2);
+        
+        // Use same message construction pattern as suggestion service
+        const currentMessages = messages.slice(-10);
+        const conversationHistory = [
+          ...currentMessages,
+          { role: userRoleKey, content: transcript },
+          { role: personaRoleKey, content: text }
+        ].map(m => ({ role: m.role, content: m.content }));
+        
+        // Add to scoring queue
+        scoringQueueRef.current.push({
+          turnNumber: newTurnNumber,
+          conversationHistory: conversationHistory,
+          timestamp: Date.now()
+        });
+        
+        // Process queue if not already processing
+        if (!isProcessingQueueRef.current) {
+          processScoreQueue();
+        }
+      }
+
     } catch (err: any) {
       console.error(err);
       toast.error(err.message || "Failed to send message");
@@ -278,7 +464,8 @@ export default function Home() {
     messages,
     selectedPersonaId, selectedScenarioId,
     difficultyProfile, scenarioDefinitionsData,
-    isApiLoading, sessionId
+    isApiLoading, sessionId, isDevelopmentMode,
+    processScoreQueue
   ]);
 
   /**
@@ -346,9 +533,28 @@ export default function Home() {
   }, []);
 
   const handleEndCall = useCallback(async () => {
+
+    // Development mode: skip end call
+    if (isDevelopmentMode) {
+      return;
+    }
+
     /* 🚦 GUARD  */
     if (endCalledRef.current) return;     // already running once
     endCalledRef.current = true;          // mark as entered
+
+    // Stop call duration tracking
+    if (callDurationInterval) {
+      clearInterval(callDurationInterval);
+      setCallDurationInterval(null);
+    }
+    
+    // Calculate final duration if we have a start time
+    if (callStartTime) {
+      const finalDuration = Date.now() - callStartTime;
+      setCallDuration(finalDuration);
+      console.log("[CallDuration] Call ended, final duration:", Math.round(finalDuration / 1000), "seconds");
+    }
 
     player.stop(); // Stop any currently playing audio
     console.log("[handleEndCall] Ending call. Current selectionStep:", selectionStep);
@@ -386,12 +592,15 @@ export default function Home() {
       
       const selectedScenario = scenarioDefinitionsData.find(s => s.id === selectedScenarioId);
       console.log('[handleEndCall] selectedScenarioId:', selectedScenarioId);
-      const evaluationPromptContent = selectedScenario ? PROMPTS[selectedScenario.evaluationPromptKey as keyof typeof PROMPTS] : '';
+      const evaluationPromptContent = selectedScenario && selectedScenarioId 
+        ? (EVALUATION_PROMPTS[selectedScenarioId] || EVALUATION_PROMPTS['GENERIC'] || '') 
+        : '';
       const requestBody = {
         messages: conversationHistory,
         roleplayProfile: profileData,
         evaluationPrompt: evaluationPromptContent,
         scenarioContext: selectedScenario?.scenarioContext || "",
+        scenarioId: selectedScenarioId,
       };
       console.log('[handleEndCall] Fetching /api/evaluate with body:', JSON.stringify(requestBody, null, 2).substring(0, 100));
 
@@ -417,8 +626,38 @@ export default function Home() {
       console.log('[handleEndCall] API response JSON:', JSON.stringify(result, null, 2).substring(0, 100));
 
       if (result.evaluation) {
-        setEvaluationData(result.evaluation as EvaluationResponse);
+        const evaluationResult = result.evaluation as EvaluationResponse;
+        setEvaluationData(evaluationResult);
         console.log('[handleEndCall] Evaluation data set successfully.');
+        
+        // Save session to localStorage
+        try {
+          const selectedScenario = scenarioDefinitionsData.find(s => s.id === selectedScenarioId);
+          const selectedPersona = personasData.find(p => p.id === selectedPersonaId);
+          
+          if (selectedScenario && selectedPersona && selectedDifficulty) {
+            saveSession({
+              scenario: selectedScenario,
+              persona: selectedPersona,
+              difficulty: selectedDifficulty,
+              evaluationData: evaluationResult,
+              transcript: messages,
+              callDuration: callDuration,
+              conversationScores: conversationScores
+            });
+            console.log('[handleEndCall] Session saved to localStorage successfully.');
+          } else {
+            console.warn('[handleEndCall] Missing data for session saving:', {
+              hasScenario: !!selectedScenario,
+              hasPersona: !!selectedPersona,
+              hasDifficulty: !!selectedDifficulty
+            });
+          }
+        } catch (sessionSaveError) {
+          console.error('[handleEndCall] Error saving session to localStorage:', sessionSaveError);
+          // Don't show user error for localStorage issues as evaluation still succeeded
+        }
+        
         toast.success("Evaluation generated!");
       } else {
         console.error('[handleEndCall] `result.evaluation` is missing. Full result:', JSON.stringify(result, null, 2));
@@ -450,7 +689,11 @@ export default function Home() {
     selectedPersonaId,
     personasData,
     selectedScenarioId,
-    scenarioDefinitionsData
+    scenarioDefinitionsData,
+    callDuration,
+    callDurationInterval,
+    callStartTime,
+    selectedDifficulty
   ]);
 
   // Update the ref whenever handleEndCall changes
@@ -498,6 +741,12 @@ const vad = useMicVAD({
   },
   
   onSpeechStart: async () => {
+    // Skip VAD processing in development mode
+    if (isDevelopmentMode) {
+      console.log('[VAD] Development mode active, skipping VAD speech processing');
+      return;
+    }
+    
     // Check if user is muted first
     if (isMuted) {
       console.log('[VAD] User is muted, ignoring speech start');
@@ -558,6 +807,12 @@ const vad = useMicVAD({
   },
   
   onSpeechEnd: async (audio) => {
+    // Skip VAD processing in development mode
+    if (isDevelopmentMode) {
+      console.log('[VAD] Development mode active, skipping VAD speech end processing');
+      return;
+    }
+    
     // Check if user is muted first
     if (isMuted) {
       console.log('[VAD] User is muted, ignoring speech end');
@@ -631,8 +886,14 @@ const vad = useMicVAD({
       if (vad.listening) {
           console.log("[VAD Status Monitor] VAD model loaded successfully.");
       }
+      
+      // In development mode, pause VAD to avoid conflicts with text input
+      if (isDevelopmentMode && vad.listening) {
+        console.log("[VAD] Pausing VAD in development mode");
+        vad.pause();
+      }
     }
-  }, [vad, vad?.loading, vad?.errored, vad?.listening]); // Added vad itself and optional chaining for safety
+  }, [vad, vad?.loading, vad?.errored, vad?.listening, isDevelopmentMode]); // Added isDevelopmentMode dependency
 
   // Update the ref whenever vad changes
   useEffect(() => {
@@ -673,6 +934,13 @@ const vad = useMicVAD({
    * Toggles between muted and unmuted states by pausing/starting VAD
    */
   const handleMuteToggle = useCallback(() => {
+    // In development mode, mute functionality is simulated
+    if (isDevelopmentMode) {
+      console.log('[DEV MODE] Simulating mute toggle');
+      setIsMuted(!isMuted);
+      return;
+    }
+    
     if (!vad || vad.loading || vad.errored) {
       console.warn('[Mute Toggle] VAD not available or in error state');
       return;
@@ -692,7 +960,7 @@ const vad = useMicVAD({
       setManualListening(true);
       setIsListening(false);
     }
-  }, [vad, isMuted, setIsMuted, setManualListening, setIsListening]);
+  }, [vad, isMuted, setIsMuted, setManualListening, setIsListening, isDevelopmentMode]);
 
   const handleRestartSession = () => {
     setMessages([]);
@@ -704,6 +972,7 @@ const vad = useMicVAD({
     setManualListening(false);
     setIsMuted(false); // Reset mute state
     setSelectedScenarioId(null);
+    setSelectedDomain('financial-advisor'); // Reset to default domain
     setSelectedPersonaId(null);
     setSelectedDifficulty(null);
     setDifficultyProfile(null);
@@ -713,6 +982,22 @@ const vad = useMicVAD({
     setIsAvatarConnected(false);
     setSessionId(null);
     setTempID(null);
+    
+    // Reset call duration tracking
+    if (callDurationInterval) {
+      clearInterval(callDurationInterval);
+      setCallDurationInterval(null);
+    }
+    setCallStartTime(null);
+    setCallDuration(0);
+    
+    // Reset conversation scores
+    setConversationScores([]);
+    
+    // Clear scoring queue
+    scoringQueueRef.current = [];
+    isProcessingQueueRef.current = false;
+    
     toast.info("Session Reset. Please select a new scenario.");
   };
     
@@ -869,16 +1154,17 @@ const vad = useMicVAD({
   }, []);
 
   useEffect(() => {
-    if (isSuggestionsPanelVisible) {
-      endCallRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-    }
-  }, [suggestions, isSuggestionsPanelVisible]);
-
-  useEffect(() => {
     if (messagesContainerRef.current) {
       messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
     }
   }, [messages]);
+
+  // Scroll End Call button into view when entering avatar interaction UI
+  useEffect(() => {
+    if (listeningInitiated) {
+      endCallRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }
+  }, [listeningInitiated]);
 
   useEffect(() => {
     if (!manualListening) {
@@ -910,10 +1196,17 @@ const vad = useMicVAD({
                 <ScenarioSelection 
                   scenarioDefinitions={scenarioDefinitionsData}
                   selectedScenarioId={selectedScenarioId}
+                  selectedDomain={selectedDomain}
                   onSelectScenarioAndPersona={(scenarioId, defaultPersonaId) => {
                     setSelectedScenarioId(scenarioId);
                     setSelectedPersonaId(defaultPersonaId);
                     setSelectionStep('selectPersona');
+                  }}
+                  onShowSessionHistory={() => setSelectionStep('sessionHistory')}
+                  onDomainChange={(domain) => {
+                    setSelectedDomain(domain);
+                    setSelectedScenarioId(null); // Clear selected scenario when domain changes
+                    setSelectedPersonaId(null); // Clear selected persona when domain changes
                   }}
                 />
               )}
@@ -931,7 +1224,10 @@ const vad = useMicVAD({
                       setSelectionStep('selectScenario');
                       // setSelectedPersonaId(null); // Optional: Clear persona if going back
                     }}
-                    onNextToDifficulty={() => setSelectionStep('selectDifficulty')}
+                    onNextToDifficulty={() => {
+                      setSelectionStep('selectDifficulty')
+                      setSelectedDifficulty('easy')
+                    }}
                   />
               )}
 
@@ -1007,10 +1303,36 @@ const vad = useMicVAD({
                       return;
                     }
                     console.log("[Debug] Attempting to start session. Current VAD object:", vad);
+                    
+                    // Start call duration tracking
+                    const startTime = Date.now();
+                    setCallStartTime(startTime);
+                    setCallDuration(0);
+                    
+                    // Clear any existing interval
+                    if (callDurationInterval) {
+                      clearInterval(callDurationInterval);
+                    }
+                    
+                    // Start interval to update duration every second
+                    const interval = setInterval(() => {
+                      setCallDuration(Date.now() - startTime);
+                    }, 1000);
+                    setCallDurationInterval(interval);
+                    
+                    console.log("[CallDuration] Started tracking at:", new Date(startTime).toISOString());
+                    
                     // Set states first to ensure video container is rendered
                     setListeningInitiated(true);
                     setManualListening(false);
                     setSelectionStep(null);
+                    
+                    // Initialize conversation scores with starting score of 0
+                    setConversationScores([{
+                      turn: 0,
+                      score: 0,
+                      timestamp: Date.now()
+                    }]);
                     // Wait for state updates and DOM render
                     setTimeout(async () => {
                       try {
@@ -1054,10 +1376,66 @@ const vad = useMicVAD({
                   evaluationData={evaluationData}
                   isLoading={isEvaluating}
                   error={evaluationError}
-                  onRestartSession={handleRestartSession}
                   transcript={messages}
                   persona={getPersonaById(selectedPersonaId!)} 
                   scenario={getScenarioDefinitionById(selectedScenarioId!)} // Pass the entire scenario object
+                  callDuration={callDuration}
+                  mode="live"
+                  conversationScores={conversationScores}
+                  primaryAction={{
+                    label: "Start New Session",
+                    onClick: handleRestartSession,
+                    className: "w-full bg-gradient-to-r from-blue-500 to-sky-600 hover:from-blue-600 hover:to-sky-700 text-white font-semibold py-3 rounded-lg shadow-md transition-transform hover:scale-105"
+                  }}
+                />
+              )}
+
+              {/* Session History Step */}
+              {selectionStep === 'sessionHistory' && (
+                <SessionHistory 
+                  onSelectSession={(sessionId) => {
+                    const session = getSessionById(sessionId);
+                    if (session) {
+                      setSelectedHistoricalSession(session);
+                      setSelectionStep('viewHistoricalSession');
+                    } else {
+                      toast.error('Session not found');
+                    }
+                  }}
+                  onBackToScenarioSelection={() => setSelectionStep('selectScenario')}
+                />
+              )}
+
+              {/* View Historical Session Step */}
+              {selectionStep === 'viewHistoricalSession' && selectedHistoricalSession && (
+                <EvaluationDisplay 
+                  difficulty={selectedHistoricalSession.difficulty}
+                  evaluationData={selectedHistoricalSession.evaluationData}
+                  isLoading={false}
+                  error={null}
+                  transcript={selectedHistoricalSession.transcript}
+                  persona={selectedHistoricalSession.persona}
+                  scenario={selectedHistoricalSession.scenario}
+                  callDuration={selectedHistoricalSession.callDuration}
+                  mode="historical"
+                  sessionTimestamp={selectedHistoricalSession.timestamp}
+                  conversationScores={selectedHistoricalSession.conversationScores}
+                  primaryAction={{
+                    label: "Back to Session History",
+                    onClick: () => {
+                      setSelectedHistoricalSession(null);
+                      setSelectionStep('sessionHistory');
+                    },
+                    className: "w-full bg-gradient-to-r from-blue-500 to-sky-600 hover:from-blue-600 hover:to-sky-700 text-white font-semibold py-3 rounded-lg shadow-md transition-transform hover:scale-105"
+                  }}
+                  secondaryAction={{
+                    label: "Back to History",
+                    onClick: () => {
+                      setSelectedHistoricalSession(null);
+                      setSelectionStep('sessionHistory');
+                    },
+                    className: "flex items-center gap-2 bg-gradient-to-r from-gray-600 to-gray-700 hover:from-gray-700 hover:to-gray-800 text-white font-medium py-2 px-4 rounded-lg shadow-md transition-all duration-200 hover:scale-105"
+                  }}
                 />
               )}
 
@@ -1083,14 +1461,27 @@ const vad = useMicVAD({
 
   return (
     <div style={mainContainerStyle} className="flex flex-col items-center">
+
       {/* Content for listeningInitiated, wrapped to ensure it's on top */}
       <div style={{ position: 'relative', zIndex: 1, width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', flexGrow: 1 }}>
         <motion.div
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5 }}
-          className="mb-8 text-center"
+          className="mb-8 text-center relative"
         >
+          {/* Development Mode Indicator */}
+          {isDevelopmentMode && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.3, delay: 0.2 }}
+              className="mx-auto mb-2 bg-gradient-to-r from-yellow-500 to-orange-500 text-black text-xs font-bold px-4 py-1 min-w-[100px] text-center rounded-full shadow-lg"
+              style={{ display: 'inline-block' }}
+            >
+              DEV MODE
+            </motion.div>
+          )}
           <div className="flex flex-col items-center gap-2">
             <h1 className="text-4xl font-semibold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-[#1D3B86] via-[#00A9E7] to-[#1D3B86]">
               <span className="font-light">{selectedScenarioDefinition?.name}</span>
@@ -1098,250 +1489,344 @@ const vad = useMicVAD({
           </div>
         </motion.div>
 
-        {/* Main Content Area - Avatar Left, Messages Right */}
-        <div className={clsx(
-          "flex w-full max-w-6xl mx-auto px-4 flex-1 transition-all duration-300 relative",
-          (isMessagesPanelVisible || isAnimating) ? "gap-8" : "justify-center"
-        )}>
-          {/* Left Side - Avatar Video */}
-          <div className={clsx(
-            "flex flex-col items-center relative transition-all duration-300",
-            (isMessagesPanelVisible || isAnimating) ? "w-1/2" : "w-full max-w-md"
-          )}>
-            {sessionId ? (
-              <div id="video-container" ref={videoContainerRef} className="h-150 max-w-md aspect-video bg-black rounded-xl shadow-lg" />
-            ) : (
-              <div className="h-150 max-w-md aspect-video bg-black rounded-xl shadow-lg flex items-center justify-center text-white text-lg">
-                Connecting to Avatar...
-              </div>
-            )}
-            
-            {/* Mute/Unmute Button - Positioned as overlay */}
-            <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2">
-              <Button
-                onClick={handleMuteToggle}
-                disabled={!vad || !!vad.loading || !!vad.errored}
-                className={clsx(
-                  "p-2 rounded-full shadow-lg transition-all duration-300 hover:shadow-xl border-2",
-                  "disabled:opacity-50 disabled:cursor-not-allowed",
-                  isMuted 
-                    ? "bg-red-500 hover:bg-red-600 border-red-400 text-white hover:border-red-300" 
-                    : "bg-[#00A9E7] hover:bg-[#0098D1] border-[#00A9E7] text-white hover:border-[#0098D1]"
-                )}
-                aria-label={isMuted ? "Unmute microphone" : "Mute microphone"}
-                title={isMuted ? "Click to unmute" : "Click to mute"}
-              >
-                {isMuted ? (
-                  <MicOff size={20} />
-                ) : (
-                  <Mic size={20} />
-                )}
-              </Button>
+        {/* Main Content Area - Two Column Grid Layout */}
+        <div className="grid grid-cols-2 gap-8 w-full max-w-7xl mx-auto px-4">
+          {/* Left Column - Avatar Video + Score chart */}
+          <motion.div 
+            className="flex flex-col gap-4 h-full"
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.5, delay: 0.2 }}
+          >
+            {/* Avatar Video Container - Takes up most of the height */}
+            <div className="flex-1 min-h-0">
+              <motion.div 
+                id="video-container" 
+                ref={videoContainerRef} 
+                className="w-full h-full bg-black rounded-xl shadow-lg aspect-video"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4, delay: 0.3 }}
+              />
             </div>
-          </div>
 
-          {/* Messages Toggle Button - Always positioned at top-right of main content area */}
-          <div className="absolute top-0 right-0 z-10">
-            <Button
-              onClick={toggleMessagesPanel}
-              className={clsx(
-                "p-2 rounded-full shadow-lg transition-all duration-300 hover:shadow-xl border-2",
-                "bg-[#00A9E7] hover:bg-[#0098D1] border-[#00A9E7] text-white hover:border-[#0098D1]"
-              )}
-              aria-label={isMessagesPanelVisible ? "Hide messages" : "Show messages"}
-              title={isMessagesPanelVisible ? "Hide messages" : "Show messages"}
+            {/* Score Chart Container - Takes up remaining space */}
+            <motion.div 
+              className="h-48 w-full overflow-hidden"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5, delay: 0.3 }}
+            >
+              <ChartLineLinear 
+                className="pb-0 backdrop-blur-md bg-gradient-to-r from-[#002B49]/40 to-[#001425]/50 border-2 border-[#00A9E7]/30 shadow-[0_0_20px_rgba(0,169,231,0.2)] hover:shadow-[0_0_30px_rgba(0,169,231,0.3)] transition-all duration-300 h-full w-full" 
+                data={conversationScores.map(score => ({
+                  turn: score.turn,
+                  score: score.score
+                }))}
+              />
+            </motion.div>
+          </motion.div>
+
+          {/* Right Column - Messages and Controls */}
+          <motion.div 
+            className="flex flex-col relative h-190"
+            initial={{ opacity: 0, x: 50 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.5, delay: 0.3 }}
+          >
+            {/* Messages Section with fixed height */}
+            <motion.div 
+              className="flex flex-col overflow-hidden"
+              style={{ height: isMessagesPanelVisible ? 'calc(100% - 200px)' : '0px' }}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.3 }}
             >
               {isMessagesPanelVisible ? (
-                <MessageSquareOff size={20} />
-              ) : (
-                <MessageSquare size={20} />
-              )}
-            </Button>
-          </div>
-
-          {/* Right Side - Scrollable Messages */}
-          <AnimatePresence onExitComplete={() => setIsAnimating(false)}>
-            {isMessagesPanelVisible && (
-              <motion.div
-                key="messages-panel"
-                initial={{ opacity: 0, x: 100, width: 0 }}
-                animate={{ opacity: 1, x: 0, width: "50%" }}
-                exit={{ opacity: 1, x: 0, width: "50%" }}
-                transition={{ duration: 0.3, ease: "easeInOut" }}
-                className="flex flex-col relative overflow-hidden"
-                onAnimationStart={() => setIsAnimating(true)}
-                onAnimationComplete={() => {
-                  // Only set animating to false on enter completion
-                  // Exit completion is handled by AnimatePresence onExitComplete
-                  if (isMessagesPanelVisible) {
-                    setIsAnimating(false);
-                  }
-                }}
-              >
-                <div className="h-150 overflow-y-auto pr-2 flex flex-col" ref={messagesContainerRef}>
-                  <div className="flex-1"></div>
-                  <div className="space-y-4">
-                    <AnimatePresence>
-                      {messages.map((message, i) => (
-                        <motion.div
-                          key={i}
-                          initial={{ opacity: 0, y: 20 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ duration: 0.3 }}
-                        >
-                          <Card 
-                          className={clsx(
-                            "backdrop-blur-md shadow-lg transition-all duration-300 hover:shadow-xl",
-                            message.role === "client" 
+              <div className="flex-1 overflow-y-auto pr-2 flex flex-col" ref={messagesContainerRef}>
+                <div className="flex-1"></div>
+                <div className="space-y-3">
+                  <AnimatePresence>
+                    {messages.map((message, i) => (
+                      <motion.div
+                        key={i}
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.3 }}
+                      >
+                        <Card 
+                        className={clsx(
+                          "backdrop-blur-md shadow-lg transition-all duration-300 hover:shadow-xl",
+                          (() => {
+                            const selectedScenario = scenarioDefinitionsData.find(s => s.id === selectedScenarioId);
+                            const personaRoleKey = selectedScenario?.personaRole || 'client';
+                            return message.role === personaRoleKey
                               ? "bg-[#1D3B86]/60 border border-[#1D3B86]/60 hover:bg-[#1D3B86]/70" 
-                              : "bg-[#00A9E7]/40 border border-[#00A9E7]/40 hover:bg-[#00A9E7]/50"
-                          )}>
-                            <CardHeader className="pb-2">
-                              <CardTitle className="text-sm font-medium text-white">
-                                {message.role === "client" ? "Customer" : "You"}
-                              </CardTitle>
-                            </CardHeader>
-                            <CardContent>
-                              <p className="whitespace-pre-wrap" style={{
-                        color: '#FFFFFF',
-                        lineHeight: '1.6',
-                        fontSize: '1rem'
-                      }}>{message.content}</p>
-                            </CardContent>
-                          </Card>
-                        </motion.div>
-                      ))}
-                    </AnimatePresence>
-                    <div ref={messagesEndRef} />
-                  </div>
+                              : "bg-[#00A9E7]/40 border border-[#00A9E7]/40 hover:bg-[#00A9E7]/50";
+                          })()
+                        )}>
+                          <CardContent>
+                            <p style={{
+                                color: '#FFFFFF',
+                                lineHeight: '1',
+                                fontSize: '0.9rem'
+                              }}>
+                              {(() => {
+                                const selectedScenario = scenarioDefinitionsData.find(s => s.id === selectedScenarioId);
+                                const personaRoleKey = selectedScenario?.personaRole || 'client';
+                                return message.role === personaRoleKey ? (selectedScenario?.personaRole || 'Customer') : 'You';
+                              })()} 
+                            </p>
+                          </CardContent>
+                          <CardContent>
+                            <p className="whitespace-pre-wrap" 
+                              style={{
+                                color: '#FFFFFF',
+                                lineHeight: '1.5',
+                                fontSize: '0.9rem'
+                              }}>
+                                {message.content}
+                            </p>
+                          </CardContent>
+                        </Card>
+                      </motion.div>
+                    ))}
+                  </AnimatePresence>
+                  <div ref={messagesEndRef} />
                 </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
+              </div>
+              ) : null}
+            </motion.div>
           
-        </div>
-
-        {/* Bottom Controls Section */}
-        <div className="w-full max-w-3xl mx-auto mt-4 relative">
-          {/* Top row with mute indicator and toggle button */}
-          <div className="flex items-center justify-between w-full mb-2">
-            {/* Left side - Empty space */}
-            <div className="flex-1"></div>
-            
-            {/* Center - Mute Status Indicator */}
-            <div className="flex-1 flex justify-center">
-              {isMuted && (
-                <div className="text-red-400 text-sm font-medium">
-                  You are muted
-                </div>
-              )}
-            </div>
-            
-            {/* Right side - Suggestions Panel Toggle Button */}
-            <div className="flex-1 flex justify-end">
-              <Button
-                onClick={toggleSuggestionsPanel}
-                className="p-2 rounded-full shadow-lg transition-all duration-300 hover:shadow-xl border-2 bg-[#00A9E7] hover:bg-[#0098D1] border-[#00A9E7] text-white hover:border-[#0098D1]"
-                aria-label={isSuggestionsPanelVisible ? "Hide suggestions" : "Show suggestions"}
-                title={isSuggestionsPanelVisible ? "Hide suggestions" : "Show suggestions"}
-              >
-                {isSuggestionsPanelVisible ? (
-                  <EyeOff size={20} />
-                ) : (
-                  <Eye size={20} />
-                )}
-              </Button>
-            </div>
-          </div>
-                    
-          {isApiLoading ? (
-            <div className="mt-4 mb-2 w-full max-w-3xl mx-auto flex justify-center px-4">
-              <LoadingIcon />
-            </div>
-          ) : suggestions && suggestions.length > 0 ? (
-            <div className="mt-4 mb-2 w-full max-w-3xl mx-auto flex flex-wrap justify-center gap-2 px-4 relative">
-              {isSuggestionsPanelVisible && suggestions.map((suggestion, index) => (
-                <Button
-                  key={index}
-                  variant="outline"
-                  size="sm"
-                  className="bg-[#00385C]/80 border-sky-500/60 text-sky-200 hover:bg-sky-700/70 hover:text-sky-100 transition-all duration-200 px-3 py-1.5 text-xs rounded-lg shadow-md hover:shadow-lg focus:ring-2 focus:ring-sky-400/50"
-                  onClick={() => {
-                    // setInput(suggestion); // Set input field with suggestion
-                    handleSubmit(suggestion); // Submit the suggestion
-                  }}
-                >
-                  {suggestion}
-                </Button>
-              ))}
-            </div>
-          ) : null}
-          
-          {/* End Call Button - Moved below the form */}
-          <div className="w-full max-w-3xl mx-auto mt-4">
-            <Button
-              ref={endCallRef}
-              type="button"
-              onClick={handleEndCall}
-              className="w-full bg-gradient-to-r from-red-500 to-red-700 hover:from-red-600 hover:to-red-800 text-white font-semibold transition-all duration-300 shadow-lg hover:shadow-xl py-3 text-lg rounded-xl flex items-center justify-center gap-2"
-              aria-label="End call"
+            {/* Controls Section - Fixed at bottom with absolute positioning */}
+            <motion.div 
+              className="flex flex-col space-y-2 absolute bottom-0 left-0 right-0"
+              initial={{ opacity: 0, y: 30 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.4, delay: 0.5 }}
             >
-              <PhoneOff size={20} />
-              <span>End Call</span>
-            </Button>
-          </div>
+              {/* Control Buttons Row */}
+              <div className="flex items-center justify-between gap-4">
+                {/* Mute Button */}
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3, delay: 0.6 }}
+                >
+                  <Button
+                    onClick={handleMuteToggle}
+                    disabled={!vad || !!vad.loading || !!vad.errored}
+                    className={clsx(
+                      "p-2 rounded-full shadow-lg transition-all duration-300 hover:shadow-xl border-2",
+                      "disabled:opacity-50 disabled:cursor-not-allowed",
+                      isMuted 
+                        ? "bg-red-500 hover:bg-red-600 border-red-400 text-white hover:border-red-300" 
+                        : "bg-[#00A9E7] hover:bg-[#0098D1] border-[#00A9E7] text-white hover:border-[#0098D1]"
+                    )}
+                    aria-label={isMuted ? "Unmute microphone" : "Mute microphone"}
+                    title={isMuted ? "Click to unmute" : "Click to mute"}
+                  >
+                    {isMuted ? (
+                      <MicOff size={20} />
+                    ) : (
+                      <Mic size={20} />
+                    )}
+                  </Button>
+                </motion.div>
 
-          <div className="pt-6 text-center max-w-xl text-balance min-h-16 mx-auto px-4" style={{ color: '#FFFFFF', fontSize: '0.95rem' }}>
-            {messages.length === 0 && listeningInitiated && (
-              <AnimatePresence>
-                {vad.loading ? (
-                  <motion.p
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    className="flex items-center justify-center gap-2"
-                  >
-                    <LoadingIcon/>
-                    Loading speech detection...
-                  </motion.p>
-                ) : vad.errored ? (
-                  <motion.p
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    style={{ color: '#FF6B6B' }}
-                  >
-                    Failed to load speech detection.
-                  </motion.p>
-                ) : (
-                  <motion.p
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                  >
-                    Start talking or type your message
-                  </motion.p>
-                )}
-              </AnimatePresence>
-            )}
-          </div>
+                {/* Mute Status Indicator */}
+                <div className="flex-1 flex justify-center">
+                  {isMuted && (
+                    <motion.div 
+                      className="text-red-400 text-sm font-medium"
+                      initial={{ opacity: 0, scale: 0.8 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={{ duration: 0.2 }}
+                    >
+                      You are muted
+                    </motion.div>
+                  )}
+                </div>
 
+                {/* Toggle Buttons */}
+                <div className="flex gap-2">
+                  {/* Messages Toggle Button */}
+                  <motion.div
+                    initial={{ opacity: 0, x: 20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.3, delay: 0.4 }}
+                  >
+                    <Button
+                      onClick={toggleMessagesPanel}
+                      className={clsx(
+                        "p-2 rounded-full shadow-lg transition-all duration-300 hover:shadow-xl border-2",
+                        "bg-[#00A9E7] hover:bg-[#0098D1] border-[#00A9E7] text-white hover:border-[#0098D1]"
+                      )}
+                      aria-label={isMessagesPanelVisible ? "Hide messages" : "Show messages"}
+                      title={isMessagesPanelVisible ? "Hide messages" : "Show messages"}
+                    >
+                      {isMessagesPanelVisible ? (
+                        <MessageSquareOff size={20} />
+                      ) : (
+                        <MessageSquare size={20} />
+                      )}
+                    </Button>
+                  </motion.div>
+
+                  {/* Suggestions Toggle Button */}
+                  <motion.div
+                    initial={{ opacity: 0, x: 20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.3, delay: 0.6 }}
+                  >
+                    <Button
+                      onClick={toggleSuggestionsPanel}
+                      className="p-2 rounded-full shadow-lg transition-all duration-300 hover:shadow-xl border-2 bg-[#00A9E7] hover:bg-[#0098D1] border-[#00A9E7] text-white hover:border-[#0098D1]"
+                      aria-label={isSuggestionsPanelVisible ? "Hide suggestions" : "Show suggestions"}
+                      title={isSuggestionsPanelVisible ? "Hide suggestions" : "Show suggestions"}
+                    >
+                      {isSuggestionsPanelVisible ? (
+                        <EyeOff size={20} />
+                      ) : (
+                        <Eye size={20} />
+                      )}
+                    </Button>
+                  </motion.div>
+                </div>
+              </div>
+
+              {/* Suggestions Display */}
+              {isApiLoading ? (
+                <motion.div 
+                  className="flex justify-center"
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3 }}
+                >
+                  <LoadingIcon />
+                </motion.div>
+              ) : suggestions && suggestions.length > 0 && isSuggestionsPanelVisible ? (
+                <motion.div 
+                  className="flex flex-col gap-2 max-h-32 overflow-y-auto"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3 }}
+                >
+                  {suggestions.map((suggestion, index) => (
+                    <motion.div
+                      key={index}
+                      initial={{ opacity: 0, scale: 0.8 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={{ duration: 0.2, delay: index * 0.05 }}
+                      className="w-full flex justify-center"
+                    >
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="max-w-full bg-[#00385C]/80 border-sky-500/60 text-sky-200 hover:bg-sky-700/70 hover:text-sky-100 transition-all duration-50 px-3 py-2 text-xs rounded-lg shadow-md hover:shadow-lg focus:ring-2 focus:ring-sky-400/50 whitespace-normal min-h-[2.5rem]"
+                        onClick={() => {
+                          if (isDevelopmentMode) {
+                            return;
+                          }
+                          handleSubmit(suggestion);
+                        }}
+                      >
+                        <span className="block break-words">{suggestion}</span>
+                      </Button>
+                    </motion.div>
+                  ))}
+                </motion.div>
+              ) : null}
+              
+              {/* End Call Button */}
+              <motion.div 
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4, delay: 0.8 }}
+              >
+                <Button
+                  ref={endCallRef}
+                  type="button"
+                  onClick={handleEndCall}
+                  className="w-full bg-gradient-to-r from-red-500 to-red-700 hover:from-red-600 hover:to-red-800 text-white font-semibold transition-all duration-300 shadow-lg hover:shadow-xl py-3 text-lg rounded-xl flex items-center justify-center gap-2"
+                  aria-label="End call"
+                >
+                  <PhoneOff size={20} />
+                  <span>End Call</span>
+                </Button>
+              </motion.div>
+            </motion.div>
+          </motion.div>
         </div>
+
+        {/* Status Text */}
+        <div className="text-center max-w-xl text-balance min-h-16 mx-auto mt-6" style={{ color: '#FFFFFF', fontSize: '0.95rem' }}>
+                {messages.length === 0 && listeningInitiated && (
+                  <AnimatePresence>
+                    {vad.loading ? (
+                      <motion.p
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="flex items-center justify-center gap-2"
+                      >
+                        <LoadingIcon/>
+                        Loading speech detection...
+                      </motion.p>
+                    ) : vad.errored ? (
+                      <motion.p
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        style={{ color: '#FF6B6B' }}
+                      >
+                        Failed to load speech detection.
+                      </motion.p>
+                    ) : (
+                      <motion.p
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                      >
+                        {isDevelopmentMode 
+                          ? "Development mode active - Use the text input below to test conversations"
+                          : "Start talking to the avatar"
+                        }
+                      </motion.p>
+                    )}
+                  </AnimatePresence>
+                )}
+              </div>
 
         {/* Active Session Display (Scenario and Patient) */}
         {listeningInitiated ? (
-          <div className="mb-8 flex flex-col items-center w-full max-w-7xl mx-auto px-6">
+          <motion.div 
+            className="my-8 flex flex-col items-center w-full max-w-7xl mx-auto px-6"
+            initial={{ opacity: 0, y: 40 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.9 }}
+          >
             {/* Clean Title Section */}
-            <div className="text-center mb-8">
+            <motion.div 
+              className="text-center mb-8"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.4, delay: 1.0 }}
+            >
               <h2 className="text-2xl font-semibold text-white mb-2">Active Training Session</h2>
               <div className="w-16 h-0.5 bg-[#FFB800] mx-auto"></div>
-            </div>
+            </motion.div>
             
             {/* Cards Container */}
             <div className="w-full flex flex-row gap-6 justify-between">
               {/* Scenario Card */}
               {selectedScenarioId && (
-                <div className="w-1/2">
+                <motion.div 
+                  className="w-1/2"
+                  initial={{ opacity: 0, x: -30 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ duration: 0.4, delay: 1.1 }}
+                >
                   <Card className="bg-gradient-to-r from-[#002B49]/80 to-[#001425]/90 border-2 border-[#FFB800]/70 shadow-[0_0_15px_rgba(255,184,0,0.3)] min-h-[180px]">
                     <CardHeader className="p-5 pb-3">
                       <div className="flex items-center gap-3">
@@ -1362,12 +1847,17 @@ const vad = useMicVAD({
                       </p>
                     </CardContent>
                   </Card>
-                </div>
+                </motion.div>
               )}
 
               {/* Persona Card */}
               {selectedScenarioId && scenarioDefinitionsData.find(s => s.id === selectedScenarioId)?.personas !== undefined && (
-                <div className="w-1/2">
+                <motion.div 
+                  className="w-1/2"
+                  initial={{ opacity: 0, x: 30 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ duration: 0.4, delay: 1.2 }}
+                >
                   <Card className="bg-gradient-to-r from-[#002B49]/80 to-[#001425]/90 border-2 border-[#FFB800]/70 shadow-[0_0_15px_rgba(255,184,0,0.3)] min-h-[180px]">
                     <CardHeader className="p-5 pb-3">
                       <div className="flex items-center gap-3">
@@ -1388,10 +1878,10 @@ const vad = useMicVAD({
                       </p>
                     </CardContent>
                   </Card>
-                </div>
+                </motion.div>
               )}
             </div>
-          </div>
+          </motion.div>
         ) : null}
 
       </div>

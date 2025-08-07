@@ -1,5 +1,5 @@
 import { Difficulty } from "@/lib/difficultyTypes";
-import { getDifficultyProfileTemplate } from "@/lib/prompt/difficulty-profiles";
+import { DIFFICULTY_PROFILE_TEMPLATES } from "@/lib/prompt/difficulty-profiles";
 import { GoogleGenAI } from "@google/genai";
 
 // Testing Gemini flash 2.5 model for evaluation
@@ -10,7 +10,7 @@ async function callGeminiFlashLite(prompt: string, requestId: string): Promise<s
   const t0 = Date.now();
   
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash-lite-preview-06-17",
+    model: "gemini-2.5-flash-lite",
     contents: [prompt],
   });
 
@@ -132,7 +132,7 @@ export async function generateDifficultyProfile(
   );
 
   // 1) Get the scenario-specific template and inject the difficulty
-  const templateData = getDifficultyProfileTemplate(scenarioId);
+  const templateData = DIFFICULTY_PROFILE_TEMPLATES[scenarioId] || DIFFICULTY_PROFILE_TEMPLATES['GENERIC'];
   const prompt = templateData.template.replace(
     '<<DIFFICULTY>>',
     difficulty
